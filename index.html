@@ -1415,25 +1415,67 @@ function openFicha(key){
     nPendEq?el("button",{class:"btn sm",onclick:()=>{ closeDrawer(); goPendientes(key); }},`Ver pendientes (${nPendEq})`):null,
   ));
 
-  // timeline unificado
+  // Historial unificado — filtrable, con columnas configurables y edición por fila
   body.appendChild(el("hr",{class:"soft"}));
-  body.appendChild(el("div",{class:"viewhead",style:"margin-bottom:8px"}, el("h2",{style:"font-size:15px"},"Historial del equipo")));
-  const items=buildTimeline(key);
-  if(!items.length) body.appendChild(el("div",{class:"small muted"},"Sin eventos registrados."));
-  else {
-    const tw=el("div",{class:"tablewrap dense"});
-    const t=el("table",{class:"grid timeline"});
-    t.appendChild(el("thead",{},el("tr",{},el("th",{},"Fecha"),el("th",{},"Qué pasó"),el("th",{},"Detalle"))));
+  const histBox=el("div"); body.appendChild(histBox);
+  const histState={ grupo:"", q:"", showCols:false };
+  function paintHist(){
+    histBox.innerHTML="";
+    const head=el("div",{class:"viewhead",style:"margin-bottom:8px"},
+      el("h2",{style:"font-size:15px"},"Historial del equipo"),
+      el("span",{class:"spacer"}),
+      el("button",{class:"btn sm",onclick:()=>{ histState.showCols=!histState.showCols; paintHist(); }},"Columnas ▾"));
+    histBox.appendChild(head);
+    // selector de columnas inline
+    if(histState.showCols){
+      const sel=(prefs.columnasHistorial&&prefs.columnasHistorial.length)?prefs.columnasHistorial.slice():HIST_DEFAULT_COLS.slice();
+      const panel=el("div",{class:"card",style:"padding:10px 12px"});
+      const row=el("div",{class:"tag-row"});
+      HIST_COLUMNS.forEach(c=>{
+        const cb=el("input",{type:"checkbox"}); cb.checked=sel.includes(c.f);
+        cb.addEventListener("change",async()=>{ const s=new Set((prefs.columnasHistorial&&prefs.columnasHistorial.length)?prefs.columnasHistorial:HIST_DEFAULT_COLS);
+          if(cb.checked)s.add(c.f); else s.delete(c.f);
+          prefs.columnasHistorial=HIST_COLUMNS.filter(x=>s.has(x.f)).map(x=>x.f); await persistPrefs(); paintHist(); });
+        row.appendChild(el("label",{class:"check",style:"margin:0 10px 0 0"}, cb, c.h));
+      });
+      panel.appendChild(row); histBox.appendChild(panel);
+    }
+    // filtros
+    const fb=el("div",{class:"filterbar"});
+    [["","Todo"],["MP","MP"],["Pendiente","Pendientes"],["Correctivo","Correctivos"]].forEach(([v,t])=>{
+      fb.appendChild(el("button",{class:"btn sm"+(histState.grupo===v?" primary":""),onclick:()=>{ histState.grupo=v; paintHist(); }},t));
+    });
+    const qi=el("input",{placeholder:"Filtrar en el historial…",value:histState.q,style:"flex:1;min-width:120px"});
+    qi.addEventListener("input",()=>{ histState.q=qi.value; clearTimeout(qi._h); qi._h=setTimeout(paintHist,200); });
+    fb.appendChild(qi);
+    histBox.appendChild(fb);
+    // datos filtrados
+    let items=buildTimeline(key);
+    if(histState.grupo) items=items.filter(i=>i.grupo===histState.grupo);
+    if(histState.q.trim()){ const q=histState.q.toLowerCase();
+      items=items.filter(i=>[i.tipo,i.titulo,i.detalle,i.ejecutor,i.estadoEquipo,i.resultado].some(v=>(v||"").toLowerCase().includes(q))); }
+    if(!items.length){ histBox.appendChild(el("div",{class:"small muted"},"Sin eventos para este filtro.")); return; }
+    const cols=visibleHistColumns();
+    const tw=el("div",{class:"tablewrap dense"}); const t=el("table",{class:"grid timeline"});
+    const trh=el("tr",{}); cols.forEach(c=>trh.appendChild(el("th",{},c.h))); trh.appendChild(el("th",{},""));
+    t.appendChild(el("thead",{},trh));
     const tb=el("tbody",{});
     for(const it of items){
-      tb.appendChild(el("tr",{},
-        el("td",{class:"mono"}, it.monthOnly ? (MESES[parseInt(it.fecha.slice(5,7),10)-1]+" "+it.fecha.slice(0,4)) : fmtDate(it.fecha)),
-        el("td",{}, el("span",{class:"tl-ico "+it.cls},it.ico+" "), it.titulo),
-        el("td",{class:"small"}, esc(it.detalle||""))
-      ));
+      const tr=el("tr",{});
+      for(const c of cols){
+        if(c.f==="fecha") tr.appendChild(el("td",{class:"mono"}, it.monthOnly ? (MESES[parseInt(it.fecha.slice(5,7),10)-1]+" "+it.fecha.slice(0,4)) : fmtDate(it.fecha)));
+        else if(c.f==="titulo") tr.appendChild(el("td",{}, el("span",{class:"tl-ico "+it.cls},it.ico+" "), it.titulo));
+        else if(c.f==="detalle") tr.appendChild(el("td",{class:"small"}, esc(it.detalle||"")));
+        else if(c.f==="estadoEquipo") tr.appendChild(el("td",{}, it.estadoEquipo?badgeEstado(it.estadoEquipo):""));
+        else if(c.f==="resultado") tr.appendChild(el("td",{}, it.resultado?(/^(Si|Si-RA|C[1-8]|FS|No|NU|Baja)$/.test(it.resultado)?badgeResultado(it.resultado):el("span",{class:"small"},esc(it.resultado))):""));
+        else tr.appendChild(el("td",{class:"small"}, esc(it[c.f]||"")));
+      }
+      tr.appendChild(el("td",{}, el("button",{class:"btn sm ghost",title: it.edit.kind==="mp_planilla"?"Registrar con fecha/detalle":"Editar este registro", onclick:()=>abrirEdicionHist(it,key)}, it.edit.kind==="mp_planilla"?"Registrar":"Editar")));
+      tb.appendChild(tr);
     }
-    t.appendChild(tb); tw.appendChild(t); body.appendChild(tw);
+    t.appendChild(tb); tw.appendChild(t); histBox.appendChild(tw);
   }
+  paintHist();
 
   openDrawer((e.equipo||"Equipo")+" · "+(e.inventario||""), body, [], {wide:true});
 }
@@ -1442,28 +1484,59 @@ function buildTimeline(key){
   const mesesConApp=new Set();
   for(const m of mpByEquipo(key)){
     const mm=mesDeFecha(m.fecha); if(mm!=null) mesesConApp.add(mm);
-    items.push({ fecha:m.fecha||m.creado, cls:"tl-mp", ico:"✓", titulo:`MP ${m.resultado?RESULTADOS[m.resultado]||m.resultado:"(sin resultado)"} ${m.tipoRegistro==="Borrador"?"· borrador":""}`,
-      detalle:[m.ejecutor, m.tipoMantenimiento, m.observaciones].filter(Boolean).join(" · ") });
+    items.push({ fecha:m.fecha||m.creado, grupo:"MP", tipo:m.tipoRegistro==="Borrador"?"MP (borrador)":"MP", cls:"tl-mp", ico:"✓",
+      titulo:`MP ${m.resultado?RESULTADOS[m.resultado]||m.resultado:"(sin resultado)"}`,
+      detalle:[m.tipoMantenimiento, m.observaciones].filter(Boolean).join(" · "),
+      ejecutor:m.ejecutor||"", estadoEquipo:m.estadoEquipo||"", resultado:m.resultado||"",
+      edit:{kind:"mp",id:m.id} });
   }
   // Resultados oficiales de la planilla (.xlsm): solo mes, sin día exacto.
   const anio = (state.meta&&state.meta.fechaCarga? String(state.meta.fechaCarga).slice(0,4):"2026");
   for(const r of regsByEquipo(key)){
     if(!r.resultado) continue;
     if(mesesConApp.has(r.mes)) continue; // ya hay una MP de la app ese mes (con fecha exacta)
-    items.push({ fecha:`${anio}-${String(r.mes+1).padStart(2,"0")}-15`, monthOnly:true, cls:"tl-mp", ico:"▣",
+    items.push({ fecha:`${anio}-${String(r.mes+1).padStart(2,"0")}-15`, monthOnly:true, grupo:"MP", tipo:"MP oficial", cls:"tl-mp", ico:"▣",
       titulo:`MP ${RESULTADOS[r.resultado]||r.resultado} · planilla oficial`,
-      detalle:`Registrada en ${MESES_LARGO[r.mes]} ${anio} (el .xlsm guarda el mes, no el día exacto)` });
+      detalle:`Registrada en ${MESES_LARGO[r.mes]} ${anio} (el .xlsm guarda el mes, no el día exacto)`,
+      ejecutor:"", estadoEquipo:estadoDeResultado(r.resultado)||"", resultado:r.resultado,
+      edit:{kind:"mp_planilla", mes:r.mes} });
   }
   for(const p of pendByEquipo(key)){
-    items.push({ fecha:p.creado, cls:"tl-pend", ico:"◷", titulo:`Pendiente ${PEND_TIPOS[p.tipo]?.label||p.tipo} creado`, detalle:p.descripcion||"" });
-    for(const s of (p.seguimiento||[])) items.push({ fecha:s.fecha, cls:"tl-pend", ico:"·", titulo:"Seguimiento", detalle:s.texto });
+    items.push({ fecha:p.creado, grupo:"Pendiente", tipo:`Pendiente · ${PEND_TIPOS[p.tipo]?.label||p.tipo}`, cls:"tl-pend", ico:"◷",
+      titulo:`Pendiente ${PEND_TIPOS[p.tipo]?.label||p.tipo} ${p.estado==="Completado"?"(completado)":"creado"}`,
+      detalle:p.descripcion||"", ejecutor:p.respEjecutivo||"", estadoEquipo:"", resultado:p.estado||"",
+      edit:{kind:"pend",id:p.id} });
+    for(const s of (p.seguimiento||[])) items.push({ fecha:s.fecha, grupo:"Pendiente", tipo:"Seguimiento", cls:"tl-pend", ico:"·",
+      titulo:"Seguimiento", detalle:s.texto, ejecutor:s.autor||"", estadoEquipo:"", resultado:"", edit:{kind:"pend",id:p.id} });
   }
   for(const c of corrByEquipo(key)){
-    items.push({ fecha:c.fechaDocumento||c.creado, cls:"tl-corr", ico:"⚒", titulo:`Correctivo abierto (Folio ${c.folioSigem||"?"})`, detalle:c.requerimiento||"" });
-    for(const a of (c.avances||[])) items.push({ fecha:a.fecha||a.registrado, cls:"tl-corr", ico:"·", titulo:a.tipo, detalle:a.detalle||"" });
-    if(c.fechaCierre) items.push({ fecha:c.fechaCierre, cls:"tl-corr", ico:"⚒", titulo:"Correctivo cerrado", detalle:"" });
+    items.push({ fecha:c.fechaDocumento||c.creado, grupo:"Correctivo", tipo:"Correctivo · OT", cls:"tl-corr", ico:"⚒",
+      titulo:`Correctivo abierto (Folio ${c.folioSigem||"?"})`, detalle:c.requerimiento||"",
+      ejecutor:c.tecnico||"", estadoEquipo:c.estadoEquipo||"", resultado:c.estadoEvento||"", edit:{kind:"corr",id:c.id} });
+    for(const a of (c.avances||[])) items.push({ fecha:a.fecha||a.registrado, grupo:"Correctivo", tipo:`Correctivo · ${a.tipo}`, cls:"tl-corr", ico:"·",
+      titulo:a.tipo, detalle:[a.numero,a.empresa,a.detalle].filter(Boolean).join(" · "),
+      ejecutor:a.responsable||"", estadoEquipo:a.estadoEquipoVisita||"", resultado:"", edit:{kind:"corr",id:c.id} });
+    if(c.fechaCierre) items.push({ fecha:c.fechaCierre, grupo:"Correctivo", tipo:"Correctivo · cierre", cls:"tl-corr", ico:"⚒",
+      titulo:"Correctivo cerrado", detalle:"", ejecutor:"", estadoEquipo:c.estadoEquipo||"", resultado:"Cerrado", edit:{kind:"corr",id:c.id} });
   }
   return items.filter(i=>i.fecha).sort((a,b)=> String(b.fecha).slice(0,10).localeCompare(String(a.fecha).slice(0,10)));
+}
+
+// Columnas configurables del historial del equipo
+const HIST_COLUMNS = [
+  { f:"fecha", h:"Fecha" }, { f:"tipo", h:"Tipo" }, { f:"titulo", h:"Qué pasó" },
+  { f:"detalle", h:"Detalle" }, { f:"ejecutor", h:"Ejecutor" }, { f:"estadoEquipo", h:"Estado equipo" }, { f:"resultado", h:"Resultado" }
+];
+const HIST_DEFAULT_COLS = ["fecha","tipo","titulo","detalle"];
+function visibleHistColumns(){
+  const sel=(prefs.columnasHistorial&&prefs.columnasHistorial.length)?prefs.columnasHistorial:HIST_DEFAULT_COLS;
+  return HIST_COLUMNS.filter(c=>sel.includes(c.f));
+}
+function abrirEdicionHist(it, key){
+  if(it.edit.kind==="mp"){ const m=state.detalleMP.find(x=>x.id===it.edit.id); if(m){ closeDrawer(); openMPForm(m); } }
+  else if(it.edit.kind==="mp_planilla"){ closeDrawer(); openMPForm(null, key, it.edit.mes); }
+  else if(it.edit.kind==="pend"){ const p=state.pendientes.find(x=>x.id===it.edit.id); if(p){ closeDrawer(); openPendForm(p); } }
+  else if(it.edit.kind==="corr"){ closeDrawer(); openCorrExpediente(it.edit.id); }
 }
 
 /* ------------------------- Vista: Mant. Preventivo ----------------------- */
