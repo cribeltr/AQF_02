@@ -1771,13 +1771,20 @@ function viewCorrectivo(){
   ));
   body: {
     if(!state.correctivos.length){ wrap.appendChild(el("div",{class:"empty"}, el("div",{class:"big"},"⚒"), "Sin expedientes correctivos.")); break body; }
-    const incompletos=state.correctivos.filter(c=>!c.otCompleta).length;
+    // filtro por la búsqueda global (folio, equipo, inventario, serie, técnico, requerimiento)
+    let lista=state.correctivos.slice();
+    const q=ui.search.trim().toLowerCase();
+    if(q){ lista=lista.filter(c=>{ const e=equipoByKey(c.equipoKey)||{};
+      return [c.folioSigem,e.equipo,e.inventario,e.serie,c.tecnico,c.requerimiento].some(v=>(v||"").toLowerCase().includes(q)); }); }
+    if(q) wrap.appendChild(el("div",{class:"filterbar"}, el("span",{class:"chip-x"}, `Búsqueda: ${ui.search} · ${lista.length} de ${state.correctivos.length}`, el("button",{onclick:()=>{ ui.search=""; $("#globalSearch").value=""; render(); }},"✕"))));
+    if(!lista.length){ wrap.appendChild(el("div",{class:"empty"}, el("div",{class:"big"},"⚒"), "Sin expedientes para esta búsqueda.")); break body; }
+    const incompletos=lista.filter(c=>!c.otCompleta).length;
     if(incompletos) wrap.appendChild(el("div",{class:"banner warn"}, `⚠ ${incompletos} expediente(s) con la OT por completar.`));
     const tw=el("div",{class:"tablewrap dense"});
     const t=el("table",{class:"grid"});
     t.appendChild(el("thead",{},el("tr",{},...["Folio SIGEM","Equipo","Apertura","Estado equipo","Avances","Estado",""].map(h=>el("th",{},h)))));
     const tb=el("tbody",{});
-    for(const c of state.correctivos.slice().sort((a,b)=>String(b.fechaDocumento||b.creado).localeCompare(String(a.fechaDocumento||a.creado)))){
+    for(const c of lista.sort((a,b)=>String(b.fechaDocumento||b.creado).localeCompare(String(a.fechaDocumento||a.creado)))){
       const e=equipoByKey(c.equipoKey);
       tb.appendChild(el("tr",{class:"clickable",onclick:()=>openCorrExpediente(c.id)},
         el("td",{class:"mono"}, c.folioSigem||"—", c.otCompleta?null:el("div",{},el("span",{class:"badge b-warn"},"OT por completar"))),
@@ -2362,18 +2369,19 @@ function wireUI(){
   $("#fileOldBackup").addEventListener("change",e=>{ const f=e.target.files[0]; if(f){closeDrawer();importOldBackup(f);} e.target.value=""; });
   $("#fileIntegrado").addEventListener("change",e=>{ const f=e.target.files[0]; if(f){closeDrawer();importIntegrado(f);} e.target.value=""; });
 
+  const SEARCH_VIEWS=["equipos","pendientes","correctivo"]; // vistas donde la búsqueda filtra in situ
   let deb;
   $("#globalSearch").addEventListener("input",e=>{ clearTimeout(deb); deb=setTimeout(()=>{ ui.search=e.target.value;
     if(e.target.value.trim()){ recordEvent("buscar",e.target.value.trim());
-      // La búsqueda solo aplica en Equipos y Pendientes; desde otras vistas, saltar a Equipos para mostrar resultados.
-      if(state.equipos.length && ui.view!=="equipos" && ui.view!=="pendientes"){ ui.view="equipos"; recordEvent("nav","Auto → Equipos por búsqueda"); }
+      // La búsqueda aplica en Equipos, Pendientes y Correctivos; desde otras vistas, saltar a Equipos.
+      if(state.equipos.length && !SEARCH_VIEWS.includes(ui.view)){ ui.view="equipos"; recordEvent("nav","Auto → Equipos por búsqueda"); }
     }
     render(); },300); });
   // Enter en la búsqueda: si queda un único equipo, abre su ficha directamente (1 gesto).
   $("#globalSearch").addEventListener("keydown",e=>{
     if(e.key!=="Enter") return;
     clearTimeout(deb); ui.search=e.target.value;
-    if(state.equipos.length && ui.view!=="equipos" && ui.view!=="pendientes") ui.view="equipos";
+    if(state.equipos.length && !SEARCH_VIEWS.includes(ui.view)) ui.view="equipos";
     render();
     if(ui.view==="equipos"){ const res=filteredEquipos();
       if(res.length===1){ recordEvent("atajo","Enter → abre único resultado "+res[0].inventario); openFicha(res[0].key); }
