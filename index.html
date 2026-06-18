@@ -2211,7 +2211,12 @@ function wireUI(){
   $("#fileIntegrado").addEventListener("change",e=>{ const f=e.target.files[0]; if(f){closeDrawer();importIntegrado(f);} e.target.value=""; });
 
   let deb;
-  $("#globalSearch").addEventListener("input",e=>{ clearTimeout(deb); deb=setTimeout(()=>{ ui.search=e.target.value; if(e.target.value.trim())recordEvent("buscar",e.target.value.trim()); render(); },300); });
+  $("#globalSearch").addEventListener("input",e=>{ clearTimeout(deb); deb=setTimeout(()=>{ ui.search=e.target.value;
+    if(e.target.value.trim()){ recordEvent("buscar",e.target.value.trim());
+      // La búsqueda solo aplica en Equipos y Pendientes; desde otras vistas, saltar a Equipos para mostrar resultados.
+      if(state.equipos.length && ui.view!=="equipos" && ui.view!=="pendientes"){ ui.view="equipos"; recordEvent("nav","Auto → Equipos por búsqueda"); }
+    }
+    render(); },300); });
 
   document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ closeDrawer(); closeFunnel(); } });
   // Al ocultar/cerrar la pestaña: si hay carpeta de auto-guardado, escribir JSON+Excel (mejor esfuerzo);
