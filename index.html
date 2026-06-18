@@ -1399,11 +1399,15 @@ function openFicha(key){
     el("span",{class:"pill"},"Familia: "+(e.fam||"—")), e.frecuencia?el("span",{class:"pill"},"MP "+e.frecuencia):null));
   const kv=el("dl",{class:"kv"});
   const add=(k,v)=>{ kv.appendChild(el("dt",{},k)); kv.appendChild(el("dd",{}, v||"—")); };
+  add("ID", e.idPlanilla);
+  add("N° Carpeta", e.carpeta);
   add("N° Inventario", el("span",{class:"mono"},e.inventario||"—"));
   add("N° Serie", el("span",{class:"mono"},e.serie||"—"));
   add("Equipo", e.equipo); add("Servicio", e.servicio); add("Unidad", e.unidad);
   add("Ubicación", e.ubicacion); add("Marca / Modelo", `${e.marca||""} ${e.modelo||""}`.trim());
-  add("Procedencia", e.procedencia); add("Clasificación", e.clasif);
+  add("Procedencia", e.procedencia);
+  add("Año Instalación", e.anio); add("Vida Útil Residual", e.vidaUtil);
+  add("Clasificación", e.clasif);
   body.appendChild(kv);
 
   // programación anual
