@@ -30,6 +30,13 @@ reparación en terreno) se **fusionan por Folio SIGEM** con lo ya importado, y l
 **pendientes** se añaden marcados con fuente «integrado» (filtrable en la vista
 Pendientes). Los respaldos reales y esta planilla se conservan en `data/`.
 
+**«Importar consolidado»** lee los `.xlsx` tipo «Consolidado de mantenciones /
+pendientes registradas» (detecta el tipo por los encabezados; admite varios a la
+vez). Registra cada fila como mantención o pendiente, enlazando por N° Serie /
+N° Inventario, normalizando estados/resultados/fechas, mapeando los tipos de
+pendiente y aplicando Borrador→Oficial. Las filas cuyo equipo no está en la
+planilla se conservan igualmente.
+
 ## Funcionalidades
 
 - **Lectura del `.xlsm`** (`PMP_2026` + `Registro_MP-2026`): encabezados en la fila 7,

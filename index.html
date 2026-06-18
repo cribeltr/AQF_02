@@ -256,6 +256,7 @@ hr.soft{border:none; border-top:1px solid var(--line-soft); margin:14px 0}
 <input type="file" id="fileJson" class="fileinput" accept=".json">
 <input type="file" id="fileOldBackup" class="fileinput" accept=".json">
 <input type="file" id="fileIntegrado" class="fileinput" accept=".xlsx">
+<input type="file" id="fileConsolidado" class="fileinput" accept=".xlsx" multiple>
 
 <!-- drawer -->
 <div class="drawer-back" id="drawerBack"></div>
@@ -807,6 +808,91 @@ async function importIntegrado(file){
     if(!state.equipos.length) toast("Carga el .xlsm oficial para revincular equipos.");
     render();
   }catch(e){ console.error(e); toast("Error importando planilla integrada: "+e.message); }
+}
+
+/* =========================================================================
+   IMPORTAR CONSOLIDADOS (.xlsx) — "Consolidado de mantenciones / pendientes"
+   Detecta el tipo por los encabezados y registra cada fila como detalleMP o
+   pendiente, enlazando por N° Serie / N° Inventario.
+   ========================================================================= */
+function normEstadoEquipo(v){
+  if(!v) return ""; const s=String(v).trim().toLowerCase();
+  if(s.includes("no oper")) return "No Operativo";
+  if(s.startsWith("oper")) return "Operativo";
+  if(s.includes("servicio")) return "Servicio Técnico";
+  if(s.includes("préstamo")||s.includes("prestamo")) return "Préstamo";
+  if(s.includes("ubicab")) return "No Ubicable";
+  if(s==="baja") return "Baja";
+  return "";
+}
+const CONS_PEND_MAP = Object.assign({}, OLD_PEND_MAP, INTEG_PEND_MAP);
+function parseTareasTexto(txt){
+  if(!txt) return [];
+  return String(txt).split(/\r?\n|\s*;\s*|\s\|\s/).map(s=>s.trim()).filter(Boolean).map(s=>{
+    const m=s.match(/^\[\s*([xX✓]?)\s*\]\s*(.*)$/);
+    if(m) return { texto:m[2].trim(), hecha: m[1].trim()!=="" };
+    return { texto:s, hecha:false };
+  });
+}
+async function importConsolidado(file){
+  try{
+    const wb=XLSX.read(await file.arrayBuffer(),{type:"array"});
+    const keys=new Set(state.equipos.map(e=>e.key));
+    let nMP=0, nPend=0, unlinkedMP=0, unlinkedPend=0, badRes=0;
+    for(const sheetName of wb.SheetNames){
+      const tbl=sheetTable(wb, sheetName); if(!tbl || !tbl.rows.length) continue;
+      const idx=tbl.idx, get=(r,name)=> idx[name]!=null?String(r[idx[name]]??"").trim():"";
+      if(idx["Fecha de ejecución"]!=null && idx["Resultado"]!=null){
+        // ---- Mantenciones ----
+        for(const r of tbl.rows){
+          const inv=get(r,"N° Inventario"), serie=get(r,"Serie");
+          if(!inv && !serie) continue;
+          const k=equipoKeyFrom(serie,inv); if(!keys.has(k)) unlinkedMP++;
+          const resultado=normResult(get(r,"Resultado")); if(get(r,"Resultado") && !resultado) badRes++;
+          const empresa=get(r,"Empresa (si externo)");
+          const fecha=parseAnyDate(get(r,"Fecha de ejecución"));
+          const eq=equipoByKey(k); const mes=mesDeFecha(fecha);
+          state.detalleMP.push({
+            id:uid(), creado:todayISO(), equipoKey:k, fecha,
+            programacion: (eq&&mes!=null&&eq.prog[mes])?eq.prog[mes]:"X",
+            ejecutor:get(r,"Ejecutor"), resultado, observaciones:[get(r,"Observaciones"),get(r,"Significado / Detalle")].filter(Boolean).join(" · "),
+            estadoEquipo: normEstadoEquipo(get(r,"Estado del equipo"))|| (resultado?estadoDeResultado(resultado)||"Operativo":"Operativo"),
+            gestionPendiente:false, tipoMantenimiento: empresa?"Externo":"Interno",
+            ingenieroExterno:"", empresaExterna:empresa,
+            tipoRegistro:"Borrador", fuente:"consolidado"
+          });
+          if(empresa && !state.empresas.includes(empresa)) state.empresas.push(empresa);
+          nMP++;
+        }
+      } else if(idx["Tipo de pendiente"]!=null){
+        // ---- Pendientes ----
+        for(const r of tbl.rows){
+          const inv=get(r,"N° Inventario"), serie=get(r,"Serie"); const tipoOrig=get(r,"Tipo de pendiente");
+          if(!inv && !serie && !tipoOrig) continue;
+          const k=equipoKeyFrom(serie,inv); if(!keys.has(k)) unlinkedPend++;
+          const map=CONS_PEND_MAP[tipoOrig] || { origen:"administrativo", tipo:"otro" };
+          const estado=/complet|hecho|resuelto/i.test(get(r,"Estado"))?"Completado":"Abierto";
+          state.pendientes.push({
+            id:uid(), creado:todayISO(), origenMP:null, equipoKey:k, origen:map.origen, tipo:map.tipo, tipoOriginal:tipoOrig, causal:"",
+            fechaReporte:"", fechaCompromiso:parseAnyDate(get(r,"Fecha compromiso")), prioridad:"Media", situacion:"",
+            respEjecutivo:get(r,"Responsable Ejecutivo"), respAdministrativo:get(r,"Responsable Administrativo")||RESP_ADMIN_DEFAULT,
+            enEsperaDe:"", descripcion:[tipoOrig?`[${tipoOrig}]`:"",get(r,"Descripción")].filter(Boolean).join(" "),
+            tareas:parseTareasTexto(get(r,"Tareas")), seguimiento:[], folioSIGEM:"", empresa:"", origenDoc:"",
+            fuente:"consolidado", estado, fechaCompletado: estado==="Completado"?todayISO():""
+          });
+          nPend++;
+        }
+      }
+    }
+    const promovidos=promoverBorradores();
+    await markDirty("usuario"); dirtySinceBackup=true;
+    const partes=[]; if(nMP)partes.push(`${nMP} mantenciones`); if(nPend)partes.push(`${nPend} pendientes`);
+    toast(`Consolidado importado: ${partes.join(" · ")||"nada reconocido"}.`+(promovidos?` ${promovidos}→Oficial.`:""));
+    if(unlinkedMP||unlinkedPend) console.info(`Consolidado: ${unlinkedMP} MP y ${unlinkedPend} pendientes sin equipo en la planilla (se conservan).`);
+    if(!state.equipos.length) toast("Carga el .xlsm oficial para enlazar equipos.");
+    render();
+    return { nMP, nPend, unlinkedMP, unlinkedPend, badRes, promovidos };
+  }catch(e){ console.error(e); toast("Error importando consolidado: "+e.message); }
 }
 
 /* =========================================================================
@@ -2336,6 +2422,7 @@ function openMenu(){
   body.appendChild(item("Cargar .xlsm","Lee ProgramaciónMP2026.xlsm (solo lectura).",()=>{closeDrawer();$("#fileXlsm").click();},"primary"));
   body.appendChild(item("Importar respaldo anterior","Migra datos de la app antigua (respaldo-gmp2026).",()=>{closeDrawer();openImportOld();}));
   body.appendChild(item("Importar planilla integrada (.xlsx)","Lee Sistema_Gestion_MP2026_Integrado: correctivos (fusión por folio) + pendientes (marcados como integrado).",()=>{closeDrawer();$("#fileIntegrado").click();}));
+  body.appendChild(item("Importar consolidado (.xlsx)","Lee «Consolidado de mantenciones / pendientes registradas» (detecta el tipo por encabezados). Puedes elegir varios a la vez.",()=>{closeDrawer();$("#fileConsolidado").click();}));
   body.appendChild(item("Exportar respaldo JSON","Descarga todos los datos de usuario (reimportable).",()=>{closeDrawer();exportJSON();}));
   body.appendChild(item("Exportar todo a Excel","Libro .xlsx con equipos, mantenciones, pendientes, correctivos, avances y resumen.",()=>{closeDrawer();exportAllXLSX();}));
   body.appendChild(item("Importar respaldo JSON","Restaura desde un respaldo de esta app.",()=>{closeDrawer();$("#fileJson").click();}));
@@ -2378,6 +2465,7 @@ function wireUI(){
   $("#fileJson").addEventListener("change",e=>{ const f=e.target.files[0]; if(f)importJSON(f); e.target.value=""; });
   $("#fileOldBackup").addEventListener("change",e=>{ const f=e.target.files[0]; if(f){closeDrawer();importOldBackup(f);} e.target.value=""; });
   $("#fileIntegrado").addEventListener("change",e=>{ const f=e.target.files[0]; if(f){closeDrawer();importIntegrado(f);} e.target.value=""; });
+  $("#fileConsolidado").addEventListener("change",async e=>{ const fs=Array.from(e.target.files); closeDrawer(); for(const f of fs) await importConsolidado(f); e.target.value=""; });
 
   const SEARCH_VIEWS=["equipos","pendientes","correctivo"]; // vistas donde la búsqueda filtra in situ
   let deb;
