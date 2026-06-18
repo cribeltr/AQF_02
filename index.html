@@ -2416,6 +2416,71 @@ async function saveToFolder(){
 /* =========================================================================
    Menú "Más", importadores, eventos globales
    ========================================================================= */
+function diagnosticoDatos(){
+  const keys=new Set(state.equipos.map(e=>e.key));
+  const orphMP=state.detalleMP.filter(m=>!keys.has(m.equipoKey));
+  const orphPend=state.pendientes.filter(p=>!keys.has(p.equipoKey));
+  const orphCorr=state.correctivos.filter(c=>!keys.has(c.equipoKey));
+  const groups={}; state.pendientes.forEach(p=>{ const k=p.equipoKey+"|"+p.tipo; (groups[k]=groups[k]||[]).push(p); });
+  const dups=Object.entries(groups).filter(([k,a])=>a.length>1 && keys.has(a[0].equipoKey)).map(([k,a])=>a);
+  return { orphMP, orphPend, orphCorr, dups };
+}
+function openDiagnostico(){
+  const d=diagnosticoDatos();
+  const body=el("div");
+  const totalOrph=d.orphMP.length+d.orphPend.length+d.orphCorr.length;
+  body.appendChild(el("div",{class:"banner "+(totalOrph||d.dups.length?"warn":"info"),style:"margin-top:0"},
+    totalOrph||d.dups.length? `Se encontraron ${totalOrph} registro(s) sin equipo en la planilla y ${d.dups.length} grupo(s) de pendientes posiblemente duplicados.` : "Sin problemas: todos los registros enlazan a un equipo y no hay duplicados evidentes. ✅"));
+
+  // Huérfanos
+  const secOrph=el("div",{class:"card"});
+  secOrph.appendChild(el("h3",{},"Registros sin equipo en la planilla ",el("span",{class:"count"},`(${totalOrph})`)));
+  secOrph.appendChild(el("div",{class:"small muted",style:"margin-bottom:8px"},"Su N° Serie/Inventario no existe en el .xlsm cargado (datos de origen con serie inválida, o equipo fuera del programa 2026). Se conservan, pero no aparecen en fichas."));
+  if(!totalOrph) secOrph.appendChild(el("div",{class:"small muted"},"Ninguno. ✅"));
+  else {
+    const tw=el("div",{class:"tablewrap dense",style:"max-height:240px"}); const t=el("table",{class:"grid"});
+    t.appendChild(el("thead",{},el("tr",{},...["Clase","Equipo (key)","Detalle","Fuente"].map(h=>el("th",{},h)))));
+    const tb=el("tbody",{});
+    d.orphMP.forEach(m=>tb.appendChild(el("tr",{}, el("td",{},"MP"), el("td",{class:"mono"},m.equipoKey), el("td",{class:"small"},(m.resultado||"")+" "+fmtDate(m.fecha)), el("td",{class:"small"},m.fuente||"app"))));
+    d.orphPend.forEach(p=>tb.appendChild(el("tr",{}, el("td",{},"Pendiente"), el("td",{class:"mono"},p.equipoKey), el("td",{class:"small"},esc((p.tipoOriginal||p.tipo)+" — "+(p.descripcion||"").slice(0,40))), el("td",{class:"small"},p.fuente||"app"))));
+    d.orphCorr.forEach(c=>tb.appendChild(el("tr",{}, el("td",{},"Correctivo"), el("td",{class:"mono"},c.equipoKey), el("td",{class:"small"},"Folio "+(c.folioSigem||"")), el("td",{class:"small"},c.fuente||""))));
+    t.appendChild(tb); tw.appendChild(t); secOrph.appendChild(tw);
+  }
+  body.appendChild(secOrph);
+
+  // Duplicados de pendientes
+  const secDup=el("div",{class:"card"});
+  secDup.appendChild(el("h3",{},"Pendientes posiblemente duplicados ",el("span",{class:"count"},`(${d.dups.length} grupos)`)));
+  secDup.appendChild(el("div",{class:"small muted",style:"margin-bottom:8px"},"Mismo equipo y mismo tipo (suele pasar al importar el respaldo y la planilla integrada). Revisa y borra los repetidos."));
+  if(!d.dups.length) secDup.appendChild(el("div",{class:"small muted"},"Ninguno. ✅"));
+  else {
+    const tw=el("div",{class:"tablewrap dense",style:"max-height:300px"}); const t=el("table",{class:"grid"});
+    t.appendChild(el("thead",{},el("tr",{},...["Equipo","Tipo","Fuente","Estado",""].map(h=>el("th",{},h)))));
+    const tb=el("tbody",{});
+    d.dups.forEach(grp=> grp.forEach((p,i)=>{ const e=equipoByKey(p.equipoKey);
+      tb.appendChild(el("tr",{style:i===0?"border-top:2px solid var(--line)":""},
+        el("td",{}, i===0?(e?esc(e.inventario):p.equipoKey):""),
+        el("td",{}, el("span",{class:"badge "+origenCls(PEND_TIPOS[p.tipo]?.origen)},PEND_TIPOS[p.tipo]?.label||p.tipo)),
+        el("td",{class:"small"}, p.fuente||"app"),
+        el("td",{class:"small"}, p.estado),
+        el("td",{}, el("div",{class:"tag-row"},
+          el("button",{class:"btn sm ghost",onclick:()=>{ closeDrawer(); openPendForm(p); }},"Ver"),
+          el("button",{class:"btn sm",title:"Borrar este pendiente",onclick:async()=>{ if(confirm("¿Borrar este pendiente duplicado?")){ const idx=state.pendientes.findIndex(x=>x.id===p.id); if(idx>=0)state.pendientes.splice(idx,1); await markDirty("usuario"); openDiagnostico(); } }},"Borrar")
+        ))
+      )); }));
+    t.appendChild(tb); tw.appendChild(t); secDup.appendChild(tw);
+  }
+  body.appendChild(secDup);
+
+  openDrawer("Diagnóstico de datos", body, [
+    {label:"Exportar diagnóstico", act:()=>{ const rows=[
+      ...d.orphMP.map(m=>({Clase:"MP huérfana",Equipo:m.equipoKey,Detalle:m.resultado+" "+m.fecha,Fuente:m.fuente||"app"})),
+      ...d.orphPend.map(p=>({Clase:"Pendiente huérfano",Equipo:p.equipoKey,Detalle:(p.tipoOriginal||p.tipo),Fuente:p.fuente||"app"})),
+      ...d.orphCorr.map(c=>({Clase:"Correctivo huérfano",Equipo:c.equipoKey,Detalle:"Folio "+c.folioSigem,Fuente:c.fuente||""})),
+    ]; exportTableXLSX(rows.length?rows:[{info:"sin huérfanos"}],"Diagnostico"); }},
+    {label:"Cerrar", cls:"primary", act:closeDrawer}
+  ], {wide:true});
+}
 function openMenu(){
   const body=el("div");
   const item=(label,desc,act,cls)=> el("button",{class:"btn "+(cls||""),style:"display:block;width:100%;text-align:left;margin-bottom:8px",onclick:act}, el("b",{},label), desc?el("div",{class:"small faint"},desc):null);
@@ -2432,6 +2497,7 @@ function openMenu(){
   body.appendChild(item("Descargar grabación de uso","Exporta la bitácora + resumen y entorno como JSON para compartir conmigo.",()=>{closeDrawer();downloadUsageLog();}));
   body.appendChild(item("Borrar grabación de uso","Vacía la bitácora de uso registrada.",()=>{closeDrawer();clearUsageLog();}));
   body.appendChild(el("hr",{class:"soft"}));
+  body.appendChild(item("Diagnóstico de datos","Detecta registros sin equipo en la planilla y pendientes posiblemente duplicados.",()=>{closeDrawer();openDiagnostico();}));
   body.appendChild(item("Reset total","Borra preferencias, planilla y datos de usuario.",()=>{closeDrawer();resetTotal();},"" ));
   if(state.meta&&state.meta.ignoradosDetalle&&state.meta.ignoradosDetalle.length)
     body.appendChild(el("div",{class:"small muted",style:"margin-top:10px"}, `${state.meta.ignoradosDetalle.length} celdas con datos sucios fueron ignoradas en la última carga.`));
