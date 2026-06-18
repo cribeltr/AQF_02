@@ -55,6 +55,8 @@ input,select,textarea{font-family:inherit; font-size:14px}
 .btn.ghost{border-color:transparent; background:transparent}
 .btn.ghost:hover{background:var(--panel)}
 .btn[disabled]{opacity:.45; cursor:not-allowed}
+#btnRec.on{background:var(--bad); color:#fff; border-color:var(--bad); animation:recblink 1.4s ease-in-out infinite}
+@keyframes recblink{50%{opacity:.65}}
 
 /* ---- Layout ---- */
 .shell{display:flex; flex:1; min-height:0}
@@ -160,8 +162,14 @@ table.grid td.num{text-align:right; font-variant-numeric:tabular-nums}
   background:var(--surface); border-bottom:1px solid var(--line); padding:12px 18px;
   display:flex; align-items:center; gap:10px; flex:none;
 }
-.drawer-head h3{margin:0; font-size:16px; flex:1}
-.drawer-body{overflow:auto; padding:16px 18px 60px; flex:1}
+.drawer-head h3{margin:0; font-size:16px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis}
+.drawer-body{overflow-y:auto; overflow-x:hidden; padding:16px 18px 60px; flex:1; min-width:0}
+/* Ficha responsiva: sin scroll horizontal — el contenido se adapta al ancho */
+.drawer-body table.grid td, .drawer-body table.grid th{white-space:normal; word-break:break-word}
+.drawer-body .tablewrap{overflow-x:auto; max-width:100%}
+.drawer-body .kv{grid-template-columns:minmax(120px,auto) 1fr}
+.drawer-body .kv dd{word-break:break-word; min-width:0}
+.drawer-body .copybox{white-space:pre-wrap; word-break:break-word}
 
 /* ---- Forms ---- */
 .field{margin-bottom:12px}
@@ -233,6 +241,7 @@ hr.soft{border:none; border-top:1px solid var(--line-soft); margin:14px 0}
   <div class="topactions">
     <button class="btn primary" id="btnLoadXlsm">Cargar .xlsm</button>
     <button class="btn" id="btnBackupNow" title="Exporta respaldo JSON (reimportable) + libro Excel">Respaldar ahora</button>
+    <button class="btn" id="btnRec" title="Graba tu navegación y acciones (con marca de tiempo) para revisar cómo usas la app. Se incluye en el respaldo.">● Grabar uso</button>
     <button class="btn" id="btnMenu">Más ▾</button>
   </div>
 </div>
@@ -341,6 +350,28 @@ let dirtySinceBackup = false;
 let backupDirHandle = null; // File System Access API
 let changesSinceFolderSave = 0;
 
+/* Grabación de uso: bitácora de navegación/acciones con marca de tiempo */
+let usageLog = [];
+let recording = false;
+let _lastLoggedView = null;
+function recordEvent(type, detail){
+  if(!recording) return;
+  usageLog.push({ t:new Date().toISOString(), view:ui.view, type, detail:String(detail==null?"":detail).replace(/\s+/g," ").trim().slice(0,160) });
+  if(usageLog.length>8000) usageLog.shift();
+}
+function toggleRecording(){
+  if(!recording){ recording=true; _lastLoggedView=null; recordEvent("session","▶ Inicio de grabación"); toast("Grabación de uso iniciada."); }
+  else { recordEvent("session","⏹ Fin de grabación"); recording=false; toast(`Grabación detenida — ${usageLog.length} eventos registrados.`); persistUsuario(); }
+  syncRecBtn();
+}
+function syncRecBtn(){ const b=document.getElementById("btnRec"); if(!b) return;
+  b.classList.toggle("on",recording); b.textContent = recording? "■ Detener ("+usageLog.length+")" : "● Grabar uso"; }
+function downloadUsageLog(){
+  if(!usageLog.length){ toast("No hay grabación que descargar."); return; }
+  download(`grabacion-uso-MP2026-${todayISO()}.json`, JSON.stringify({ tipo:"grabacion-uso-gmp2026", fecha:new Date().toISOString(), eventos:usageLog }, null, 2));
+}
+function clearUsageLog(){ if(!usageLog.length){ toast("Nada que borrar."); return; } if(confirm("¿Borrar la grabación de uso ("+usageLog.length+" eventos)?")){ usageLog=[]; persistUsuario(); syncRecBtn(); toast("Grabación borrada."); } }
+
 /* ------------------------------ Utilidades ------------------------------- */
 const $ = (s,r=document)=>r.querySelector(s);
 const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
@@ -426,7 +457,7 @@ async function persistDatos(){
   await idbSet(LS_DATOS, datos); lsSet(LS_DATOS, datos);
 }
 async function persistUsuario(){
-  const u = { detalleMP:state.detalleMP, pendientes:state.pendientes, correctivos:state.correctivos, empresas:state.empresas, ingenieros:state.ingenieros };
+  const u = { detalleMP:state.detalleMP, pendientes:state.pendientes, correctivos:state.correctivos, empresas:state.empresas, ingenieros:state.ingenieros, usageLog };
   await idbSet(LS_USUARIO, u); lsSet(LS_USUARIO, u);
 }
 async function persistPrefs(){ await idbSet(LS_PREF, prefs); lsSet(LS_PREF, prefs); }
@@ -443,6 +474,7 @@ async function loadAll(){
   if(u){
     state.detalleMP=u.detalleMP||[]; state.pendientes=u.pendientes||[];
     state.correctivos=u.correctivos||[]; state.empresas=u.empresas||[]; state.ingenieros=u.ingenieros||[];
+    usageLog=u.usageLog||[];
   }
 }
 async function markDirty(persist="usuario"){
@@ -1017,6 +1049,8 @@ function render(){
     case "resumen": v.appendChild(viewResumen()); break;
     default: v.appendChild(viewTablero());
   }
+  if(recording && ui.view!==_lastLoggedView){ recordEvent("view","Vista: "+(NAV.find(n=>n.id===ui.view)?.label||ui.view)); _lastLoggedView=ui.view; }
+  syncRecBtn();
 }
 
 /* ----------------------------- Vista: Tablero ---------------------------- */
@@ -1121,6 +1155,7 @@ function viewTablero(){
   return wrap;
 }
 function goEquipos(quick){ ui.view="equipos"; ui.quick=Object.assign({familia:"",servicio:"",estado:"",mes:""},quick||{}); render(); }
+function goPendientes(equipoKey){ ui.view="pendientes"; ui.pendEquipo=equipoKey||""; ui.pendEstado=""; ui.pendTipo=""; ui.pendFuente=""; recordEvent("nav","Pendientes del equipo "+(equipoByKey(equipoKey)?.inventario||equipoKey||"")); render(); }
 
 /* ----------------------------- Vista: Equipos ---------------------------- */
 const EQ_COLUMNS = [
@@ -1248,7 +1283,7 @@ function viewEquipos(){
     for(const c of cols){
       if(c.f==="_estado") tr.appendChild(el("td",{}, badgeEstado(estadoEquipo(e.key))));
       else if(c.f==="_pend"){ const n=pendByEquipo(e.key).filter(p=>p.estado!=="Completado").length;
-        tr.appendChild(el("td",{}, n?el("span",{class:"badge "+(pendByEquipo(e.key).some(pendienteVencido)?"b-bad":"b-warn")}, n+" pend."):"")); }
+        tr.appendChild(el("td",{}, n?el("span",{class:"badge "+(pendByEquipo(e.key).some(pendienteVencido)?"b-bad":"b-warn"),style:"cursor:pointer",title:"Ver pendientes de este equipo",onclick:(ev)=>{ev.stopPropagation();goPendientes(e.key);}}, n+" pend."):"")); }
       else tr.appendChild(el("td",{class:c.mono?"mono":""}, esc(e[c.f]||"")));
     }
     tb.appendChild(tr);
@@ -1319,6 +1354,7 @@ function openColSelector(){
 /* --------------------------- Ficha de equipo ----------------------------- */
 function openFicha(key){
   const e=equipoByKey(key); if(!e) return;
+  recordEvent("ficha","Abrió equipo "+(e.inventario||"")+" — "+(e.equipo||""));
   const body=el("div");
   // datos
   const est=estadoEquipo(key);
@@ -1346,10 +1382,12 @@ function openFicha(key){
   body.appendChild(prog);
 
   // acciones
+  const nPendEq=pendByEquipo(key).filter(p=>p.estado!=="Completado").length;
   body.appendChild(el("div",{class:"tag-row",style:"margin:14px 0"},
     el("button",{class:"btn sm primary",onclick:()=>{ closeDrawer(); openMPForm(null,key); }},"+ Registrar MP"),
     el("button",{class:"btn sm",onclick:()=>{ closeDrawer(); openPendForm(null,{equipoKey:key}); }},"+ Pendiente"),
     el("button",{class:"btn sm",onclick:()=>{ closeDrawer(); openCorrSubevento(key); }},"+ Correctivo"),
+    nPendEq?el("button",{class:"btn sm",onclick:()=>{ closeDrawer(); goPendientes(key); }},`Ver pendientes (${nPendEq})`):null,
   ));
 
   // timeline unificado
@@ -1711,6 +1749,8 @@ function viewPendientes(){
   ));
   // filtros
   const fb=el("div",{class:"filterbar"});
+  if(ui.pendEquipo){ const e=equipoByKey(ui.pendEquipo);
+    fb.appendChild(el("span",{class:"chip-x"}, `Equipo: ${e?e.inventario:ui.pendEquipo}`, el("button",{onclick:()=>{ ui.pendEquipo=""; render(); }},"✕"))); }
   const estSel=el("select",{onchange:e=>{ ui.pendEstado=e.target.value; render(); }});
   [["","Estado: todos"],["Abierto","Abiertos"],["Completado","Completados"]].forEach(([v,t])=>{ const o=el("option",{value:v},t); if((ui.pendEstado||"")===v)o.selected=true; estSel.appendChild(o); });
   fb.appendChild(estSel);
@@ -1731,6 +1771,7 @@ function viewPendientes(){
   if(ui.pendEstado) list=list.filter(p=> ui.pendEstado==="Abierto"? p.estado!=="Completado": p.estado==="Completado");
   if(ui.pendTipo) list=list.filter(p=>p.tipo===ui.pendTipo);
   if(ui.pendFuente) list=list.filter(p=>(p.fuente||"app")===ui.pendFuente);
+  if(ui.pendEquipo) list=list.filter(p=>p.equipoKey===ui.pendEquipo);
   if(ui.search.trim()){ const q=ui.search.toLowerCase(); list=list.filter(p=>{ const e=equipoByKey(p.equipoKey); return [p.descripcion,e?.equipo,e?.inventario,e?.serie].some(v=>(v||"").toLowerCase().includes(q)); }); }
   list.sort((a,b)=> (a.estado==="Completado"?1:0)-(b.estado==="Completado"?1:0) || String(a.fechaCompromiso).localeCompare(String(b.fechaCompromiso)));
 
@@ -2002,7 +2043,7 @@ function exportJSON(){
   const payload={ app:"Sistema de Gestión MP 2026 — Equipamiento Clínico HHHA", tipo:"respaldo-gmp2026-v3", version:3,
     fecha:new Date().toISOString(), meta:state.meta,
     detalleMP:state.detalleMP, pendientes:state.pendientes, correctivos:state.correctivos,
-    empresas:state.empresas, ingenieros:state.ingenieros, prefs };
+    empresas:state.empresas, ingenieros:state.ingenieros, usageLog, prefs };
   download(`respaldo-MP2026-${todayISO()}.json`, JSON.stringify(payload,null,2));
   dirtySinceBackup=false; changesSinceFolderSave=0; render(); toast("Respaldo JSON exportado.");
 }
@@ -2019,6 +2060,7 @@ async function importJSON(file){
     if(data.correctivos) state.correctivos=data.correctivos;
     if(data.empresas) state.empresas=data.empresas;
     if(data.ingenieros) state.ingenieros=data.ingenieros;
+    if(Array.isArray(data.usageLog)) usageLog=data.usageLog;
     if(data.prefs) prefs=Object.assign(prefs,data.prefs);
     promoverBorradores();
     await persistUsuario(); await persistPrefs(); dirtySinceBackup=false; render(); toast("Respaldo importado.");
@@ -2092,7 +2134,7 @@ async function saveToFolder(){
   try{
     // JSON reimportable
     const payload={ tipo:"respaldo-gmp2026-v3", version:3, fecha:new Date().toISOString(), meta:state.meta,
-      detalleMP:state.detalleMP, pendientes:state.pendientes, correctivos:state.correctivos, empresas:state.empresas, ingenieros:state.ingenieros, prefs };
+      detalleMP:state.detalleMP, pendientes:state.pendientes, correctivos:state.correctivos, empresas:state.empresas, ingenieros:state.ingenieros, usageLog, prefs };
     const fhJ=await backupDirHandle.getFileHandle(`respaldo-MP2026.json`,{create:true});
     const wJ=await fhJ.createWritable(); await wJ.write(JSON.stringify(payload,null,2)); await wJ.close();
     // Excel legible (mismo libro de "Respaldar ahora")
@@ -2118,6 +2160,10 @@ function openMenu(){
   body.appendChild(item("Importar respaldo JSON","Restaura desde un respaldo de esta app.",()=>{closeDrawer();$("#fileJson").click();}));
   body.appendChild(item("Elegir carpeta de auto-guardado","Respaldo automático de JSON + Excel a una carpeta, sin clics (también al cerrar la pestaña). Requiere Chrome/Edge.",()=>{closeDrawer();chooseBackupFolder();}));
   body.appendChild(el("hr",{class:"soft"}));
+  body.appendChild(item((recording?"■ Detener grabación":"● Grabar uso")+` (${usageLog.length} eventos)`,"Registra tu navegación y acciones con marca de tiempo. Se incluye en el respaldo.",()=>{closeDrawer();toggleRecording();}));
+  body.appendChild(item("Descargar grabación de uso","Exporta la bitácora de uso como JSON para compartir.",()=>{closeDrawer();downloadUsageLog();}));
+  body.appendChild(item("Borrar grabación de uso","Vacía la bitácora de uso registrada.",()=>{closeDrawer();clearUsageLog();}));
+  body.appendChild(el("hr",{class:"soft"}));
   body.appendChild(item("Reset total","Borra preferencias, planilla y datos de usuario.",()=>{closeDrawer();resetTotal();},"" ));
   if(state.meta&&state.meta.ignoradosDetalle&&state.meta.ignoradosDetalle.length)
     body.appendChild(el("div",{class:"small muted",style:"margin-top:10px"}, `${state.meta.ignoradosDetalle.length} celdas con datos sucios fueron ignoradas en la última carga.`));
@@ -2135,7 +2181,16 @@ function openImportOld(){
 function wireUI(){
   $("#btnLoadXlsm").addEventListener("click",()=>$("#fileXlsm").click());
   $("#btnBackupNow").addEventListener("click",respaldarAhora);
+  $("#btnRec").addEventListener("click",toggleRecording);
   $("#btnMenu").addEventListener("click",openMenu);
+  // Grabación de uso: registra clics en botones/accesos cuando está activa
+  document.addEventListener("click",(e)=>{
+    if(!recording) return;
+    const t=e.target.closest("button,a,.kpi,.heatcell,[data-rec]");
+    if(!t || t.id==="btnRec") return;
+    const label=(t.getAttribute("data-rec")||t.textContent||"").replace(/\s+/g," ").trim().slice(0,60);
+    recordEvent("click", label||t.tagName.toLowerCase());
+  },true);
   $("#drawerClose").addEventListener("click",closeDrawer);
   $("#drawerBack").addEventListener("click",closeDrawer);
   $("#fileXlsm").addEventListener("change",e=>{ const f=e.target.files[0]; if(f)importXlsm(f); e.target.value=""; });
