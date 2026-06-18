@@ -1667,13 +1667,21 @@ function openMPForm(mp, presetKey, presetMes){
   eqField.appendChild(dl);
   const eqInfo=el("div",{class:"hint"}, f.equipoKey?equipoLabel(f.equipoKey):"");
   eqField.appendChild(eqInfo);
-  eqInput.addEventListener("change",()=>{ const e=matchEquipo(eqInput.value); if(e){ f.equipoKey=e.key; eqInfo.textContent=`${e.equipo} · ${e.servicio}`; } });
+  eqInput.addEventListener("change",()=>{ const e=matchEquipo(eqInput.value); if(e){ f.equipoKey=e.key; eqInfo.textContent=`${e.equipo} · ${e.servicio}`; prefillProg(); } });
   body.appendChild(eqField);
 
-  body.appendChild(frow([
-    selField("Programación","programacion",f,Object.keys(PROG_CODES).map(k=>({v:k,t:k+" — "+PROG_CODES[k]}))),
-    dateField("Fecha *","fecha",f),
-  ]));
+  const progField=selField("Programación","programacion",f,Object.keys(PROG_CODES).map(k=>({v:k,t:k+" — "+PROG_CODES[k]})));
+  const progSel=progField.querySelector("select");
+  // Pre-rellena la Programación con el código real del equipo para el mes de la fecha.
+  function prefillProg(){ const eq=equipoByKey(f.equipoKey); const mes=mesDeFecha(f.fecha); if(eq && mes!=null && eq.prog[mes]){ f.programacion=eq.prog[mes]; progSel.value=eq.prog[mes]; } }
+  const fechaField=el("div",{class:"field"}); fechaField.appendChild(el("label",{},"Fecha *"));
+  const fechaInput=el("input",{type:"date",value:(f.fecha||"").slice(0,10)});
+  fechaInput.addEventListener("input",()=>{ f.fecha=fechaInput.value; prefillProg(); });
+  fechaField.appendChild(fechaInput);
+  body.appendChild(frow([ progField, fechaField ]));
+  // pre-relleno inicial: por el mes indicado (MP pendiente) o por el mes de la fecha
+  if(presetMes!=null){ const eq=equipoByKey(f.equipoKey); if(eq && eq.prog[presetMes]){ f.programacion=eq.prog[presetMes]; progSel.value=eq.prog[presetMes]; } }
+  else if(isNew) prefillProg();
   body.appendChild(frow([
     selField("Ejecutor *","ejecutor",f,EJECUTORES.map(x=>({v:x,t:x}))),
     selField("Resultado *","resultado",f,[{v:"",t:"— elegir —"}].concat(Object.keys(RESULTADOS).map(k=>({v:k,t:k+" — "+RESULTADOS[k]}))),()=>refreshMP()),
@@ -1727,7 +1735,9 @@ function openMPForm(mp, presetKey, presetMes){
       if(f.empresaExterna){ prefs.ultimaEmpresa=f.empresaExterna; if(!state.empresas.includes(f.empresaExterna))state.empresas.push(f.empresaExterna);}
       await persistPrefs();
       // pendiente automático (B.8)
-      if(f.gestionPendiente && isNew) crearPendienteAuto(f);
+      // Pendiente automático (§9/§B.8): SIEMPRE con causal C1–C8 (reprogramación);
+      // con "gestión pendiente" marcado sin causal → protocolo (interno/externo).
+      if(isNew && (f.gestionPendiente || /^C[1-8]$/.test(f.resultado))) crearPendienteAuto(f);
       await markDirty("usuario"); closeDrawer(); render(); toast("MP guardada.");
     }}
   ]);
