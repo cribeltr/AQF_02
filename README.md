@@ -49,8 +49,10 @@ Pendientes). Los respaldos reales y esta planilla se conservan en `data/`.
 - **Tablero / centro de control**: banda de KPIs reactivos, tablero de operatividad
   y panel «Por volcar al `.xlsm`» (celda exacta hoja/fila/columna, copiar/exportar).
 - **Equipos**: tabla densa (~1.000 filas, sin virtualización), búsqueda global con
-  *debounce*, **filtro por encabezado tipo Excel** (multi-selección), selector de
-  columnas recordado, orden por columna, filtros rápidos combinables, exportación a Excel.
+  *debounce* (atajo `/` para enfocar; **Enter** abre la ficha si queda un único
+  resultado; desde otras vistas salta a Equipos), **filtro por encabezado tipo Excel**
+  (multi-selección), selector de columnas recordado, orden por columna, filtros rápidos
+  combinables, exportación a Excel.
 - **Ficha de equipo**: historial cronológico unificado (MP + pendientes + correctivos).
 - **Mantenimiento Preventivo**: registro del detalle, ciclo Borrador→Oficial,
   pendiente automático con causal o gestión pendiente.

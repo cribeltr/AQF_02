@@ -236,7 +236,7 @@ hr.soft{border:none; border-top:1px solid var(--line-soft); margin:14px 0}
 <div class="topbar">
   <div class="brand">Gestión MP 2026<small>Equipamiento Clínico HHHA</small></div>
   <div class="search">
-    <input id="globalSearch" type="search" placeholder="Buscar equipo por inventario, nombre, serie, servicio, marca…" autocomplete="off">
+    <input id="globalSearch" type="search" placeholder="Buscar equipo (inventario, nombre, serie, servicio…) · / para enfocar · Enter abre si hay 1 resultado" autocomplete="off">
   </div>
   <div class="topactions">
     <button class="btn primary" id="btnLoadXlsm">Cargar .xlsm</button>
@@ -2217,8 +2217,23 @@ function wireUI(){
       if(state.equipos.length && ui.view!=="equipos" && ui.view!=="pendientes"){ ui.view="equipos"; recordEvent("nav","Auto → Equipos por búsqueda"); }
     }
     render(); },300); });
+  // Enter en la búsqueda: si queda un único equipo, abre su ficha directamente (1 gesto).
+  $("#globalSearch").addEventListener("keydown",e=>{
+    if(e.key!=="Enter") return;
+    clearTimeout(deb); ui.search=e.target.value;
+    if(state.equipos.length && ui.view!=="equipos" && ui.view!=="pendientes") ui.view="equipos";
+    render();
+    if(ui.view==="equipos"){ const res=filteredEquipos();
+      if(res.length===1){ recordEvent("atajo","Enter → abre único resultado "+res[0].inventario); openFicha(res[0].key); }
+      else recordEvent("atajo",`Enter en búsqueda (${res.length} resultados)`); }
+  });
 
-  document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ closeDrawer(); closeFunnel(); } });
+  document.addEventListener("keydown",e=>{
+    if(e.key==="Escape"){ closeDrawer(); closeFunnel(); }
+    // "/" enfoca la búsqueda (atajo de teclado, salvo si ya se escribe en un campo)
+    const tag=(document.activeElement&&document.activeElement.tagName)||"";
+    if(e.key==="/" && !["INPUT","TEXTAREA","SELECT"].includes(tag)){ e.preventDefault(); const s=$("#globalSearch"); s.focus(); s.select(); }
+  });
   // Al ocultar/cerrar la pestaña: si hay carpeta de auto-guardado, escribir JSON+Excel (mejor esfuerzo);
   // este evento es más fiable que beforeunload para operaciones asíncronas.
   document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden"){ persistUsuario(); if(backupDirHandle && dirtySinceBackup) saveToFolder(); } });
