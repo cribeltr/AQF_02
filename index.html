@@ -2040,7 +2040,7 @@ function exportTableXLSX(rows, name){
 }
 
 // Respaldo completo en estructura Excel: un libro .xlsx con una hoja por colección
-function exportAllXLSX(){
+function buildWorkbook(){
   const wb=XLSX.utils.book_new();
   const addSheet=(rows,name)=>{ const ws=XLSX.utils.json_to_sheet(rows.length?rows:[{ "(sin datos)":"" }]); XLSX.utils.book_append_sheet(wb,ws,name.slice(0,31)); };
 
@@ -2075,26 +2075,33 @@ function exportAllXLSX(){
   // Resumen mes × código
   const { cols, matrix }=resumenMesCodigo();
   addSheet(matrix.map((r,m)=>{ const o={Mes:MESES_LARGO[m]}; cols.forEach(c=>o[c]=r.counts[c]); return o; }), "Resumen mes×código");
-
-  XLSX.writeFile(wb, `respaldo-MP2026-${todayISO()}.xlsx`);
+  return wb;
+}
+function exportAllXLSX(){
+  XLSX.writeFile(buildWorkbook(), `respaldo-MP2026-${todayISO()}.xlsx`);
   toast("Respaldo Excel exportado.");
 }
 
 async function chooseBackupFolder(){
   if(!window.showDirectoryPicker){ toast("Tu navegador no soporta auto-guardado a carpeta. Usa «Respaldar ahora»."); return; }
-  try{ backupDirHandle=await window.showDirectoryPicker(); toast("Carpeta de respaldo elegida. Auto-guardado activo."); saveToFolder(); }
+  try{ backupDirHandle=await window.showDirectoryPicker(); const ok=await saveToFolder(); toast(ok?"Carpeta elegida. Auto-guardado de JSON + Excel activo (incl. al cerrar).":"Carpeta elegida, pero no se pudo escribir aún."); render(); }
   catch(e){ /* cancelado */ }
 }
 async function saveToFolder(){
-  if(!backupDirHandle) return;
+  if(!backupDirHandle) return false;
   try{
-    const fh=await backupDirHandle.getFileHandle(`respaldo-MP2026.json`,{create:true});
-    const w=await fh.createWritable();
+    // JSON reimportable
     const payload={ tipo:"respaldo-gmp2026-v3", version:3, fecha:new Date().toISOString(), meta:state.meta,
       detalleMP:state.detalleMP, pendientes:state.pendientes, correctivos:state.correctivos, empresas:state.empresas, ingenieros:state.ingenieros, prefs };
-    await w.write(JSON.stringify(payload,null,2)); await w.close();
+    const fhJ=await backupDirHandle.getFileHandle(`respaldo-MP2026.json`,{create:true});
+    const wJ=await fhJ.createWritable(); await wJ.write(JSON.stringify(payload,null,2)); await wJ.close();
+    // Excel legible (mismo libro de "Respaldar ahora")
+    const buf=XLSX.write(buildWorkbook(),{type:"array",bookType:"xlsx"});
+    const fhX=await backupDirHandle.getFileHandle(`respaldo-MP2026.xlsx`,{create:true});
+    const wX=await fhX.createWritable(); await wX.write(buf); await wX.close();
     dirtySinceBackup=false; changesSinceFolderSave=0;
-  }catch(e){ console.warn("auto-guardado falló",e); }
+    return true;
+  }catch(e){ console.warn("auto-guardado falló",e); return false; }
 }
 
 /* =========================================================================
@@ -2109,7 +2116,7 @@ function openMenu(){
   body.appendChild(item("Exportar respaldo JSON","Descarga todos los datos de usuario (reimportable).",()=>{closeDrawer();exportJSON();}));
   body.appendChild(item("Exportar todo a Excel","Libro .xlsx con equipos, mantenciones, pendientes, correctivos, avances y resumen.",()=>{closeDrawer();exportAllXLSX();}));
   body.appendChild(item("Importar respaldo JSON","Restaura desde un respaldo de esta app.",()=>{closeDrawer();$("#fileJson").click();}));
-  body.appendChild(item("Elegir carpeta de auto-guardado","Respaldo automático (File System Access API).",()=>{closeDrawer();chooseBackupFolder();}));
+  body.appendChild(item("Elegir carpeta de auto-guardado","Respaldo automático de JSON + Excel a una carpeta, sin clics (también al cerrar la pestaña). Requiere Chrome/Edge.",()=>{closeDrawer();chooseBackupFolder();}));
   body.appendChild(el("hr",{class:"soft"}));
   body.appendChild(item("Reset total","Borra preferencias, planilla y datos de usuario.",()=>{closeDrawer();resetTotal();},"" ));
   if(state.meta&&state.meta.ignoradosDetalle&&state.meta.ignoradosDetalle.length)
@@ -2140,7 +2147,12 @@ function wireUI(){
   $("#globalSearch").addEventListener("input",e=>{ clearTimeout(deb); deb=setTimeout(()=>{ ui.search=e.target.value; render(); },300); });
 
   document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ closeDrawer(); closeFunnel(); } });
-  window.addEventListener("beforeunload",e=>{ if(dirtySinceBackup){ e.preventDefault(); e.returnValue=""; } });
+  // Al ocultar/cerrar la pestaña: si hay carpeta de auto-guardado, escribir JSON+Excel (mejor esfuerzo);
+  // este evento es más fiable que beforeunload para operaciones asíncronas.
+  document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden" && backupDirHandle && dirtySinceBackup) saveToFolder(); });
+  window.addEventListener("pagehide",()=>{ if(backupDirHandle && dirtySinceBackup) saveToFolder(); });
+  // Aviso al cerrar SOLO si hay cambios y no hay auto-guardado a carpeta activo.
+  window.addEventListener("beforeunload",e=>{ if(dirtySinceBackup && !backupDirHandle){ e.preventDefault(); e.returnValue=""; } });
 }
 
 (async function init(){

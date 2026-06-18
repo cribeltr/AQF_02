@@ -37,11 +37,15 @@ Pendientes). Los respaldos reales y esta planilla se conservan en `data/`.
   `Q`/`S`, columnas auxiliares tras `AR` ignoradas, N° Inventario y Serie como
   **texto** (conservan ceros a la izquierda). Datos sucios en celdas de mes → ignorados.
 - **Persistencia** IndexedDB + localStorage (3 claves: preferencias, planilla cruda,
-  datos de usuario). **Reset total**, aviso de respaldo al salir y **auto-guardado a
-  carpeta** (File System Access API) donde haya soporte.
+  datos de usuario). **Reset total**.
 - **Respaldo doble**: «Respaldar ahora» genera el **JSON** reimportable *y* un libro
   **Excel** (`.xlsx`) con una hoja por colección (equipos, mantenciones, pendientes,
   correctivos, avances y resumen mes×código). También disponibles por separado en «Más».
+- **Auto-guardado a carpeta** (File System Access API, Chrome/Edge): eliges una carpeta
+  una vez y la app escribe ahí **JSON + Excel** de forma automática (cada cierto número
+  de cambios y **al ocultar/cerrar la pestaña**), sin diálogos. Donde no hay soporte,
+  al cerrar se muestra el **aviso** de respaldo (los navegadores no permiten descargar
+  de forma fiable al cerrar; por eso es aviso, no descarga forzada).
 - **Tablero / centro de control**: banda de KPIs reactivos, tablero de operatividad
   y panel «Por volcar al `.xlsm`» (celda exacta hoja/fila/columna, copiar/exportar).
 - **Equipos**: tabla densa (~1.000 filas, sin virtualización), búsqueda global con
