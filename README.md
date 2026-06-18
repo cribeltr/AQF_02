@@ -24,6 +24,12 @@ de la app antigua (`tipo: "respaldo-gmp2026"`) y migra mantenciones, pendientes 
 correctivos a la estructura nueva. Equipos y registros **no** se importan: se
 re-leen del `.xlsm` oficial. Archivo de prueba: `sample-data/ejemplo_respaldo_anterior.json`.
 
+**«Importar planilla integrada»** lee `Sistema_Gestion_MP2026_Integrado.xlsx`: los
+expedientes **correctivos** detallados (OT + envíos + visitas + línea de compra +
+reparación en terreno) se **fusionan por Folio SIGEM** con lo ya importado, y los
+**pendientes** se añaden marcados con fuente «integrado» (filtrable en la vista
+Pendientes). Los respaldos reales y esta planilla se conservan en `data/`.
+
 ## Funcionalidades
 
 - **Lectura del `.xlsm`** (`PMP_2026` + `Registro_MP-2026`): encabezados en la fila 7,

@@ -246,6 +246,7 @@ hr.soft{border:none; border-top:1px solid var(--line-soft); margin:14px 0}
 <input type="file" id="fileXlsm" class="fileinput" accept=".xlsm,.xlsx">
 <input type="file" id="fileJson" class="fileinput" accept=".json">
 <input type="file" id="fileOldBackup" class="fileinput" accept=".json">
+<input type="file" id="fileIntegrado" class="fileinput" accept=".xlsx">
 
 <!-- drawer -->
 <div class="drawer-back" id="drawerBack"></div>
@@ -578,6 +579,7 @@ async function importOldBackup(file){
         tareas: normalizeTareas(p.tareas||[]),
         seguimiento: normalizeSeguimiento(p.gestiones||p.seguimiento||[]),
         folioSIGEM: p.folioSIGEM||"", empresa: p.empresa||"", origenDoc: p.origenDoc||"",
+        fuente: p.fuente||"app",
         estado: p.estado||"Abierto", fechaCompletado:(p.fechaCompletado||"").slice(0,10)
       }); nPend++;
     }
@@ -615,6 +617,153 @@ function normalizeSeguimiento(arr){
     if(typeof g==="string") return { fecha:todayISO(), texto:g, autor:"" };
     return { fecha:(g.fecha||g.cuando||todayISO()).slice(0,10), texto:g.texto||g.detalle||g.comentario||"", autor:g.autor||"" };
   });
+}
+
+/* =========================================================================
+   IMPORTAR PLANILLA INTEGRADA (.xlsx)  — Sistema_Gestion_MP2026_Integrado
+   Lee los expedientes correctivos (OT + sub-registros) y el módulo de
+   pendientes con taxonomía propia. Correctivos: fusión por folio.
+   Pendientes: se añaden marcados con fuente "integrado".
+   ========================================================================= */
+const INTEG_PEND_MAP = {
+  "Reprogramación MP":          { origen:"preventiva",     tipo:"reprogramacion" },
+  "Documento faltante":         { origen:"correctivo",     tipo:"documental" },
+  "Firma faltante":             { origen:"preventiva",     tipo:"reprogramacion" },
+  "Pauta de Monitoreo Diario":  { origen:"administrativo", tipo:"otro" },
+  "Gestión general":            { origen:"administrativo", tipo:"otro" },
+  "Seguimiento de estado":      { origen:"administrativo", tipo:"otro" }
+};
+function parseAnyDate(v){
+  if(v==null) return "";
+  if(v instanceof Date && !isNaN(v)) return v.toISOString().slice(0,10);
+  let s=String(v).trim(); if(!s) return "";
+  let m=s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m=s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/); if(m) return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  if(/^\d+(\.\d+)?$/.test(s)){ const n=parseFloat(s); if(n>30000&&n<60000){ return new Date(Date.UTC(1899,11,30)+Math.round(n)*86400000).toISOString().slice(0,10); } }
+  const d=new Date(s); return isNaN(d)?"":d.toISOString().slice(0,10);
+}
+// Devuelve {idx:{header→col}, rows:[...]} de una hoja, identificando columnas por encabezado.
+function sheetTable(wb, name){
+  const ws=wb.Sheets[name]; if(!ws) return null;
+  const arr=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:""});
+  let h=-1; for(let i=0;i<arr.length;i++){ if(arr[i] && arr[i].some(c=>String(c).trim()!=="")){ h=i; break; } }
+  if(h<0) return { idx:{}, rows:[] };
+  const idx={}; arr[h].forEach((c,i)=>{ const k=String(c).trim(); if(k) idx[k]=i; });
+  return { idx, rows: arr.slice(h+1).filter(r=>r && r.some(c=>String(c).trim()!=="")) };
+}
+async function importIntegrado(file){
+  try{
+    const wb=XLSX.read(await file.arrayBuffer(),{type:"array"});
+    const get=(row,idx,name)=> idx[name]!=null ? String(row[idx[name]]??"").trim() : "";
+    let nCorrNuevo=0, nCorrEnriq=0, nAvances=0, nPend=0;
+
+    // índice de correctivos por folio (incluye los ya importados del JSON)
+    const corrByFolio={}; for(const c of state.correctivos){ if(c.folioSigem) corrByFolio[c.folioSigem]=c; }
+    function ensureCorr(folio, eqKey){
+      if(corrByFolio[folio]) return corrByFolio[folio];
+      const c={ id:uid(), creado:todayISO(), equipoKey:eqKey||"", folioSigem:folio, otCompleta:false,
+        tipoEvento:"Orden de Trabajo", requerimiento:"", fechaDocumento:"", tecnico:"", estadoEquipo:"No Operativo",
+        estadoEvento:"Abierto", tipoRegistro:"Borrador", fuente:"integrado", avances:[] };
+      state.correctivos.push(c); corrByFolio[folio]=c; nCorrNuevo++; return c;
+    }
+    function addAvance(c, av){
+      if(!av.fecha && !av.detalle && !av.numero) return;
+      const dup=(c.avances||[]).some(a=>a.tipo===av.tipo && (a.fecha||"")===(av.fecha||"") && (a.numero||"")===(av.numero||""));
+      if(dup) return;
+      c.avances.push(Object.assign({id:uid(),registrado:new Date().toISOString()},av)); nAvances++;
+    }
+
+    // 1. Órdenes de Trabajo (apertura)
+    const ot=sheetTable(wb,"1. Órdenes de Trabajo");
+    if(ot) for(const r of ot.rows){
+      const folio=get(r,ot.idx,"Folio SIGEM"); if(!folio) continue;
+      const inv=get(r,ot.idx,"N° Inventario"), serie=get(r,ot.idx,"N° Serie (auto)");
+      const eqKey=equipoKeyFrom(serie,inv);
+      const existed=!!corrByFolio[folio];
+      const c=ensureCorr(folio,eqKey);
+      // enriquecer apertura (la planilla integrada es más completa)
+      if(!c.equipoKey) c.equipoKey=eqKey;
+      if(!c.fechaDocumento) c.fechaDocumento=parseAnyDate(get(r,ot.idx,"Fecha OT"));
+      if(!c.tecnico) c.tecnico=get(r,ot.idx,"Técnico asignado");
+      if(!c.requerimiento) c.requerimiento=get(r,ot.idx,"Requerimiento");
+      const estIni=get(r,ot.idx,"Estado inicial"); if(estIni) c.estadoEquipo=estIni;
+      c.otCompleta=true;
+      const estEvento=get(r,ot.idx,"Estado del evento");
+      if(/cerrad/i.test(estEvento)){ c.estadoEvento="Cerrado"; const fc=parseAnyDate(get(r,ot.idx,"Fecha cierre OT")); if(fc)c.fechaCierre=fc; }
+      if(existed) nCorrEnriq++;
+    }
+    // 5. Servicio Técnico (Envíos)
+    const env=sheetTable(wb,"5. Servicio Técnico (Envíos)");
+    if(env) for(const r of env.rows){
+      const folio=get(r,env.idx,"Folio SIGEM"); if(!folio) continue; const c=ensureCorr(folio);
+      addAvance(c,{ tipo:"Envío a servicio técnico", fecha:parseAnyDate(get(r,env.idx,"Fecha envío")),
+        numero:get(r,env.idx,"N° Hoja de Envío"), empresa:get(r,env.idx,"Empresa destino"), responsable:get(r,env.idx,"Responsable que envía"),
+        detalle:[`Reporte ${get(r,env.idx,"N° Reporte Servicio")}`.trim(), get(r,env.idx,"¿Reporte recibido?")].filter(s=>s&&s!=="Reporte").join(" · ") });
+      const fret=parseAnyDate(get(r,env.idx,"Fecha retorno"));
+      if(fret) addAvance(c,{ tipo:"Retorno de servicio técnico", fecha:fret, detalle:[`Estado: ${get(r,env.idx,"Estado al retorno")}`, get(r,env.idx,"Folio guía despacho")?`Guía ${get(r,env.idx,"Folio guía despacho")}`:""].filter(Boolean).join(" · "), estadoEquipoVisita:get(r,env.idx,"Estado al retorno") });
+    }
+    // 4. Visitas Técnicas
+    const vis=sheetTable(wb,"4. Visitas Técnicas");
+    if(vis) for(const r of vis.rows){
+      const folio=get(r,vis.idx,"Folio SIGEM"); if(!folio) continue; const c=ensureCorr(folio);
+      addAvance(c,{ tipo:"Visita técnica externa", fecha:parseAnyDate(get(r,vis.idx,"Fecha visita")),
+        empresa:get(r,vis.idx,"Proveedor / empresa"), responsable:get(r,vis.idx,"Ingeniero externo"), numero:get(r,vis.idx,"N° Reporte Servicio"),
+        detalle:[`¿Reparó? ${get(r,vis.idx,"¿Reparó?")}`.trim(), get(r,vis.idx,"Descripción tarea")].filter(s=>s&&s!=="¿Reparó?").join(" — "),
+        estadoEquipoVisita:get(r,vis.idx,"Estado final") });
+    }
+    // 2. Línea de Compra
+    const lc=sheetTable(wb,"2. Línea de Compra");
+    if(lc) for(const r of lc.rows){
+      const folio=get(r,lc.idx,"Folio SIGEM"); if(!folio) continue; const c=ensureCorr(folio);
+      const nCot=get(r,lc.idx,"N° cotización"), fCot=parseAnyDate(get(r,lc.idx,"Fecha cotización")), prov=get(r,lc.idx,"Proveedor cotizado");
+      if(nCot||fCot||prov) addAvance(c,{ tipo:"Cotización", fecha:fCot, numero:nCot, empresa:prov, detalle:[get(r,lc.idx,"Tipo de compra"), get(r,lc.idx,"Monto cotizado")?`Monto ${get(r,lc.idx,"Monto cotizado")}`:""].filter(Boolean).join(" · ") });
+      const nIT=get(r,lc.idx,"N° Informe Técnico");
+      if(nIT) addAvance(c,{ tipo:"Informe técnico emitido", fecha:parseAnyDate(get(r,lc.idx,"Fecha informe")), numero:nIT, responsable:get(r,lc.idx,"Responsable informe") });
+      const nOC=get(r,lc.idx,"N° OC");
+      if(nOC) addAvance(c,{ tipo:"OC emitida", fecha:parseAnyDate(get(r,lc.idx,"Fecha emisión OC")), numero:nOC, detalle:get(r,lc.idx,"Descripción OC") });
+    }
+    // 7. Reparación en Terreno
+    const rt=sheetTable(wb,"7. Reparación en Terreno");
+    if(rt) for(const r of rt.rows){
+      const folio=get(r,rt.idx,"Folio SIGEM"); if(!folio) continue; const c=ensureCorr(folio);
+      addAvance(c,{ tipo:"Reparación en terreno", fecha:parseAnyDate(get(r,rt.idx,"Fecha reparación / cierre")), detalle:get(r,rt.idx,"Descripción tarea"), estadoEquipoVisita:get(r,rt.idx,"Estado final equipo") });
+    }
+    // 6. Bajas
+    const bj=sheetTable(wb,"6. Bajas");
+    if(bj) for(const r of bj.rows){
+      const folio=get(r,bj.idx,"Folio SIGEM"); if(!folio) continue; const c=ensureCorr(folio);
+      addAvance(c,{ tipo:"Baja", fecha:parseAnyDate(get(r,bj.idx,"Fecha baja")), numero:get(r,bj.idx,"Folio documento de baja"), responsable:get(r,bj.idx,"Responsable interno"), detalle:get(r,bj.idx,"Motivo") });
+      c.estadoEquipo="Baja";
+    }
+
+    // Pendientes (taxonomía propia) → se añaden marcados fuente:"integrado"
+    const pe=sheetTable(wb,"Pendientes");
+    if(pe) for(const r of pe.rows){
+      const tipoOrig=get(r,pe.idx,"Tipo de pendiente"); const inv=get(r,pe.idx,"N° Inventario"), serie=get(r,pe.idx,"Serie");
+      if(!tipoOrig && !inv && !serie) continue;
+      const map=INTEG_PEND_MAP[tipoOrig] || { origen:"administrativo", tipo:"otro" };
+      const estadoSheet=get(r,pe.idx,"Estado");
+      const estado=/hecho|resuelto|complet/i.test(estadoSheet)?"Completado":"Abierto";
+      const tareasTxt=get(r,pe.idx,"Tareas");
+      const tareas=tareasTxt? tareasTxt.split(/\r?\n|\s\|\s/).map(t=>t.trim()).filter(Boolean).map(t=>({texto:t,hecha:estado==="Completado"})):[];
+      state.pendientes.push({
+        id:uid(), creado:parseAnyDate(get(r,pe.idx,"Creado"))||todayISO(), origenMP:null,
+        equipoKey:equipoKeyFrom(serie,inv), origen:map.origen, tipo:map.tipo, tipoOriginal:tipoOrig, causal:"",
+        fechaReporte:"", fechaCompromiso:parseAnyDate(get(r,pe.idx,"Fecha compromiso")),
+        prioridad:get(r,pe.idx,"Prioridad")||"Media", situacion:[get(r,pe.idx,"Situación"), estadoSheet].filter(Boolean).join(" · "),
+        respEjecutivo:get(r,pe.idx,"Responsable Ejecutivo"), respAdministrativo:get(r,pe.idx,"Responsable Administrativo")||RESP_ADMIN_DEFAULT,
+        enEsperaDe:get(r,pe.idx,"En espera de"),
+        descripcion:[tipoOrig?`[${tipoOrig}]`:"", get(r,pe.idx,"Descripción")].filter(Boolean).join(" "),
+        tareas, seguimiento:[], folioSIGEM:"", empresa:"", origenDoc:"",
+        fuente:"integrado", estado, fechaCompletado:parseAnyDate(get(r,pe.idx,"Fecha completado"))
+      }); nPend++;
+    }
+
+    await markDirty("usuario"); dirtySinceBackup=true;
+    toast(`Integrado: ${nCorrNuevo} correctivos nuevos, ${nCorrEnriq} enriquecidos (+${nAvances} avances), ${nPend} pendientes.`);
+    if(!state.equipos.length) toast("Carga el .xlsm oficial para revincular equipos.");
+    render();
+  }catch(e){ console.error(e); toast("Error importando planilla integrada: "+e.message); }
 }
 
 /* =========================================================================
@@ -845,6 +994,7 @@ function renderNav(){
   }
   nav.appendChild(el("div",{class:"navsep"}));
   nav.appendChild(el("button",{onclick:openImportOld}, el("span",{class:"ico"},"⇪"), el("span",{},"Importar respaldo anterior")));
+  nav.appendChild(el("button",{onclick:()=>$("#fileIntegrado").click()}, el("span",{class:"ico"},"⊞"), el("span",{},"Importar planilla integrada")));
   if(state.meta){
     nav.appendChild(el("div",{class:"navhint"}, `Planilla: ${esc(state.meta.archivo||"")}`));
     nav.appendChild(el("div",{class:"navhint"}, `${state.equipos.length} equipos · cargada ${fmtDate(state.meta.fechaCarga)}`));
@@ -1568,22 +1718,31 @@ function viewPendientes(){
   tipoSel.appendChild(el("option",{value:""},"Tipo: todos"));
   Object.entries(PEND_TIPOS).forEach(([k,v])=>{ const o=el("option",{value:k},v.label); if((ui.pendTipo||"")===k)o.selected=true; tipoSel.appendChild(o); });
   fb.appendChild(tipoSel);
+  const fuentes=[...new Set(state.pendientes.map(p=>p.fuente||"app"))];
+  if(fuentes.length>1){
+    const fSel=el("select",{onchange:e=>{ ui.pendFuente=e.target.value; render(); }});
+    fSel.appendChild(el("option",{value:""},"Fuente: todas"));
+    [["app","App / respaldo"],["integrado","Planilla integrada"]].forEach(([v,t])=>{ if(!fuentes.includes(v))return; const o=el("option",{value:v},t); if((ui.pendFuente||"")===v)o.selected=true; fSel.appendChild(o); });
+    fb.appendChild(fSel);
+  }
   wrap.appendChild(fb);
 
   let list=state.pendientes.slice();
   if(ui.pendEstado) list=list.filter(p=> ui.pendEstado==="Abierto"? p.estado!=="Completado": p.estado==="Completado");
   if(ui.pendTipo) list=list.filter(p=>p.tipo===ui.pendTipo);
+  if(ui.pendFuente) list=list.filter(p=>(p.fuente||"app")===ui.pendFuente);
   if(ui.search.trim()){ const q=ui.search.toLowerCase(); list=list.filter(p=>{ const e=equipoByKey(p.equipoKey); return [p.descripcion,e?.equipo,e?.inventario,e?.serie].some(v=>(v||"").toLowerCase().includes(q)); }); }
   list.sort((a,b)=> (a.estado==="Completado"?1:0)-(b.estado==="Completado"?1:0) || String(a.fechaCompromiso).localeCompare(String(b.fechaCompromiso)));
 
   if(!list.length){ wrap.appendChild(el("div",{class:"empty"},el("div",{class:"big"},"◷"),"Sin pendientes.")); return wrap; }
   const tw=el("div",{class:"tablewrap dense"}); const t=el("table",{class:"grid"});
-  t.appendChild(el("thead",{},el("tr",{},...["Tipo","Equipo","Compromiso","En espera de","Resp.","Estado",""].map(h=>el("th",{},h)))));
+  t.appendChild(el("thead",{},el("tr",{},...["Tipo","Fuente","Equipo","Compromiso","En espera de","Resp.","Estado",""].map(h=>el("th",{},h)))));
   const tb=el("tbody",{});
   for(const p of list){
     const e=equipoByKey(p.equipoKey); const atraso=diasAtraso(p);
     tb.appendChild(el("tr",{class:"clickable",onclick:()=>openPendForm(p)},
-      el("td",{}, el("span",{class:"badge "+origenCls(PEND_TIPOS[p.tipo]?.origen)}, PEND_TIPOS[p.tipo]?.label||p.tipo)),
+      el("td",{}, el("span",{class:"badge "+origenCls(PEND_TIPOS[p.tipo]?.origen), title:p.tipoOriginal?("Original: "+p.tipoOriginal):""}, PEND_TIPOS[p.tipo]?.label||p.tipo), p.tipoOriginal?el("div",{class:"faint small"},esc(p.tipoOriginal)):null),
+      el("td",{}, (p.fuente||"app")==="integrado"?el("span",{class:"badge b-info"},"integrado"):el("span",{class:"badge b-neutral"},"app")),
       el("td",{}, e?esc(e.equipo):p.equipoKey, el("div",{class:"faint mono"}, e?e.inventario:"")),
       el("td",{}, fmtDate(p.fechaCompromiso), atraso?el("span",{class:"badge b-bad",style:"margin-left:6px"},atraso+"d"):null),
       el("td",{class:"small"}, esc(p.enEsperaDe||"")),
@@ -1596,7 +1755,7 @@ function viewPendientes(){
   return wrap;
 }
 function pendRowForExport(p){ const e=equipoByKey(p.equipoKey)||{}; return {
-  Tipo:PEND_TIPOS[p.tipo]?.label||p.tipo, Origen:PEND_TIPOS[p.tipo]?.origen||"", Inventario:e.inventario||"", Equipo:e.equipo||"", Servicio:e.servicio||"",
+  Tipo:PEND_TIPOS[p.tipo]?.label||p.tipo, TipoOriginal:p.tipoOriginal||"", Fuente:p.fuente||"app", Origen:PEND_TIPOS[p.tipo]?.origen||"", Inventario:e.inventario||"", Equipo:e.equipo||"", Servicio:e.servicio||"",
   Compromiso:p.fechaCompromiso, EnEsperaDe:p.enEsperaDe||"", RespEjecutivo:p.respEjecutivo||"", RespAdministrativo:p.respAdministrativo||"",
   Estado:p.estado, Descripcion:p.descripcion||"" }; }
 function origenCls(o){ return o==="correctivo"?"b-info":(o==="preventiva"?"b-ok":"b-neutral"); }
@@ -1946,6 +2105,7 @@ function openMenu(){
   const item=(label,desc,act,cls)=> el("button",{class:"btn "+(cls||""),style:"display:block;width:100%;text-align:left;margin-bottom:8px",onclick:act}, el("b",{},label), desc?el("div",{class:"small faint"},desc):null);
   body.appendChild(item("Cargar .xlsm","Lee ProgramaciónMP2026.xlsm (solo lectura).",()=>{closeDrawer();$("#fileXlsm").click();},"primary"));
   body.appendChild(item("Importar respaldo anterior","Migra datos de la app antigua (respaldo-gmp2026).",()=>{closeDrawer();openImportOld();}));
+  body.appendChild(item("Importar planilla integrada (.xlsx)","Lee Sistema_Gestion_MP2026_Integrado: correctivos (fusión por folio) + pendientes (marcados como integrado).",()=>{closeDrawer();$("#fileIntegrado").click();}));
   body.appendChild(item("Exportar respaldo JSON","Descarga todos los datos de usuario (reimportable).",()=>{closeDrawer();exportJSON();}));
   body.appendChild(item("Exportar todo a Excel","Libro .xlsx con equipos, mantenciones, pendientes, correctivos, avances y resumen.",()=>{closeDrawer();exportAllXLSX();}));
   body.appendChild(item("Importar respaldo JSON","Restaura desde un respaldo de esta app.",()=>{closeDrawer();$("#fileJson").click();}));
@@ -1974,6 +2134,7 @@ function wireUI(){
   $("#fileXlsm").addEventListener("change",e=>{ const f=e.target.files[0]; if(f)importXlsm(f); e.target.value=""; });
   $("#fileJson").addEventListener("change",e=>{ const f=e.target.files[0]; if(f)importJSON(f); e.target.value=""; });
   $("#fileOldBackup").addEventListener("change",e=>{ const f=e.target.files[0]; if(f){closeDrawer();importOldBackup(f);} e.target.value=""; });
+  $("#fileIntegrado").addEventListener("change",e=>{ const f=e.target.files[0]; if(f){closeDrawer();importIntegrado(f);} e.target.value=""; });
 
   let deb;
   $("#globalSearch").addEventListener("input",e=>{ clearTimeout(deb); deb=setTimeout(()=>{ ui.search=e.target.value; render(); },300); });
