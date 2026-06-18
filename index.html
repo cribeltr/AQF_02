@@ -642,9 +642,10 @@ async function importOldBackup(file){
     for(const g of (data.ingenieros||[])) if(g && !state.ingenieros.includes(g)) state.ingenieros.push(g);
 
     promoverBorradores();
+    const dropRep=dedupReprogramaciones();
     await persistUsuario();
     dirtySinceBackup=true;
-    toast(`Importado: ${nMP} mantenciones, ${nPend} pendientes, ${nCorr} correctivos.`);
+    toast(`Importado: ${nMP} mantenciones, ${nPend} pendientes, ${nCorr} correctivos.`+(dropRep?` ${dropRep} reprog. duplicada(s) descartada(s).`:""));
     if(!state.equipos.length) toast("Recuerda cargar el .xlsm oficial para revincular equipos.");
     render();
   }catch(e){ console.error(e); toast("Error importando respaldo: "+e.message); }
@@ -803,8 +804,9 @@ async function importIntegrado(file){
       }); nPend++;
     }
 
+    const dropRep=dedupReprogramaciones();
     await markDirty("usuario"); dirtySinceBackup=true;
-    toast(`Integrado: ${nCorrNuevo} correctivos nuevos, ${nCorrEnriq} enriquecidos (+${nAvances} avances), ${nPend} pendientes.`);
+    toast(`Integrado: ${nCorrNuevo} correctivos nuevos, ${nCorrEnriq} enriquecidos (+${nAvances} avances), ${nPend} pendientes.`+(dropRep?` ${dropRep} reprog. dup. descartada(s).`:""));
     if(!state.equipos.length) toast("Carga el .xlsm oficial para revincular equipos.");
     render();
   }catch(e){ console.error(e); toast("Error importando planilla integrada: "+e.message); }
@@ -885,9 +887,10 @@ async function importConsolidado(file){
       }
     }
     const promovidos=promoverBorradores();
+    const dropRep=dedupReprogramaciones();
     await markDirty("usuario"); dirtySinceBackup=true;
     const partes=[]; if(nMP)partes.push(`${nMP} mantenciones`); if(nPend)partes.push(`${nPend} pendientes`);
-    toast(`Consolidado importado: ${partes.join(" · ")||"nada reconocido"}.`+(promovidos?` ${promovidos}→Oficial.`:""));
+    toast(`Consolidado importado: ${partes.join(" · ")||"nada reconocido"}.`+(promovidos?` ${promovidos}→Oficial.`:"")+(dropRep?` ${dropRep} reprog. dup. descartada(s).`:""));
     if(unlinkedMP||unlinkedPend) console.info(`Consolidado: ${unlinkedMP} MP y ${unlinkedPend} pendientes sin equipo en la planilla (se conservan).`);
     if(!state.equipos.length) toast("Carga el .xlsm oficial para enlazar equipos.");
     render();
@@ -927,7 +930,20 @@ function promoverBorradores(){
   return n;
 }
 
-// Estado actual del equipo (deriva del último evento relevante)
+// Descarta reprogramaciones duplicadas: una sola por equipo (prefiere conservar la Abierta, luego la más antigua).
+function dedupReprogramaciones(){
+  const byEq={};
+  state.pendientes.forEach(p=>{ if(p.tipo==="reprogramacion"){ (byEq[p.equipoKey]=byEq[p.equipoKey]||[]).push(p); } });
+  const removeIds=new Set();
+  Object.values(byEq).forEach(grp=>{
+    if(grp.length<2) return;
+    grp.sort((a,b)=> (a.estado==="Completado"?1:0)-(b.estado==="Completado"?1:0) || String(a.creado||"").localeCompare(String(b.creado||"")));
+    grp.slice(1).forEach(p=>removeIds.add(p.id));
+  });
+  if(removeIds.size) state.pendientes=state.pendientes.filter(p=>!removeIds.has(p.id));
+  return removeIds.size;
+}
+
 function estadoEquipo(key){
   // Baja tiene prioridad máxima
   for(let m=11;m>=0;m--){ const r=resultadoMes(key,m); if(r.resultado==="Baja") return "Baja"; }
@@ -2330,7 +2346,8 @@ async function importJSON(file){
     if(Array.isArray(data.usageLog)) usageLog=data.usageLog;
     if(data.prefs) prefs=Object.assign(prefs,data.prefs);
     promoverBorradores();
-    await persistUsuario(); await persistPrefs(); dirtySinceBackup=false; render(); toast("Respaldo importado.");
+    const dropRep=dedupReprogramaciones();
+    await persistUsuario(); await persistPrefs(); dirtySinceBackup=false; render(); toast("Respaldo importado."+(dropRep?` ${dropRep} reprog. duplicada(s) descartada(s).`:""));
   }catch(e){ toast("Error importando JSON: "+e.message); }
 }
 async function importOldBackupData(data){ const blob=new File([JSON.stringify(data)],"b.json"); return importOldBackup(blob); }
@@ -2473,6 +2490,7 @@ function openDiagnostico(){
   body.appendChild(secDup);
 
   openDrawer("Diagnóstico de datos", body, [
+    {label:"Descartar reprog. duplicadas", act:async()=>{ const n=dedupReprogramaciones(); await markDirty("usuario"); toast(n?`${n} reprogramación(es) duplicada(s) descartada(s).`:"No había reprogramaciones duplicadas."); openDiagnostico(); render(); }},
     {label:"Exportar diagnóstico", act:()=>{ const rows=[
       ...d.orphMP.map(m=>({Clase:"MP huérfana",Equipo:m.equipoKey,Detalle:m.resultado+" "+m.fecha,Fuente:m.fuente||"app"})),
       ...d.orphPend.map(p=>({Clase:"Pendiente huérfano",Equipo:p.equipoKey,Detalle:(p.tipoOriginal||p.tipo),Fuente:p.fuente||"app"})),
