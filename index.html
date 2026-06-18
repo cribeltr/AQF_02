@@ -385,7 +385,7 @@ function resumenUso(){
 const $ = (s,r=document)=>r.querySelector(s);
 const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
 const uid = ()=> Date.now().toString(36) + Math.random().toString(36).slice(2,8);
-const todayISO = ()=> new Date().toISOString().slice(0,10);
+const todayISO = ()=>{ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 function esc(s){ return (s==null?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 function el(tag, attrs={}, ...kids){
   const e=document.createElement(tag);
@@ -1169,21 +1169,24 @@ function goPendientes(equipoKey){ ui.view="pendientes"; ui.pendEquipo=equipoKey|
 
 /* ----------------------------- Vista: Equipos ---------------------------- */
 const EQ_COLUMNS = [
+  { f:"idPlanilla", h:"ID" },
+  { f:"carpeta", h:"N° Carpeta" },
   { f:"inventario", h:"N° Inventario", mono:true },
   { f:"equipo", h:"Equipo" },
   { f:"serie", h:"N° Serie", mono:true },
   { f:"servicio", h:"Servicio" },
+  { f:"unidad", h:"Unidad" },
   { f:"ubicacion", h:"Ubicación" },
-  { f:"fam", h:"Familia" },
+  { f:"procedencia", h:"Procedencia" },
   { f:"marca", h:"Marca" },
   { f:"modelo", h:"Modelo" },
+  { f:"anio", h:"Año Instalación" },
+  { f:"vidaUtil", h:"Vida Útil Residual" },
+  { f:"clasif", h:"Clasificación" },
+  { f:"fam", h:"Familia" },
+  { f:"frecuencia", h:"Frecuencia" },
   { f:"_estado", h:"Estado", special:true },
   { f:"_pend", h:"Tareas", special:true },
-  { f:"frecuencia", h:"Frecuencia" },
-  { f:"clasif", h:"Clasificación" },
-  { f:"unidad", h:"Unidad" },
-  { f:"procedencia", h:"Procedencia" },
-  { f:"anio", h:"Año" },
 ];
 const EQ_DEFAULT_COLS = ["inventario","equipo","serie","servicio","ubicacion","_estado","_pend"];
 
@@ -1349,13 +1352,24 @@ function funnelOutside(e){ const m=$("#funnelMenu"); if(m && !m.contains(e.targe
 function closeFunnel(){ const m=$("#funnelMenu"); if(m)m.remove(); document.removeEventListener("click",funnelOutside); }
 
 function openColSelector(){
-  const cur = (prefs.columnasEquipos&&prefs.columnasEquipos.length)?prefs.columnasEquipos.slice():EQ_DEFAULT_COLS.slice();
-  const body=el("div",{class:"colsel"});
-  EQ_COLUMNS.forEach(c=>{
-    const cb=el("input",{type:"checkbox"}); cb.checked=cur.includes(c.f);
-    cb.addEventListener("change",()=>{ if(cb.checked){ if(!cur.includes(c.f))cur.push(c.f);} else { const i=cur.indexOf(c.f); if(i>=0)cur.splice(i,1);} });
-    body.appendChild(el("label",{class:"check"}, cb, c.h));
-  });
+  let cur = (prefs.columnasEquipos&&prefs.columnasEquipos.length)?prefs.columnasEquipos.slice():EQ_DEFAULT_COLS.slice();
+  const body=el("div");
+  body.appendChild(el("div",{class:"small muted",style:"margin-bottom:8px"},"Elige qué columnas ver en la tabla de Equipos (se recuerda). El orden sigue el de esta lista."));
+  const quick=el("div",{class:"tag-row",style:"margin-bottom:10px"});
+  const list=el("div",{class:"colsel"});
+  function paint(){
+    list.innerHTML="";
+    EQ_COLUMNS.forEach(c=>{
+      const cb=el("input",{type:"checkbox"}); cb.checked=cur.includes(c.f);
+      cb.addEventListener("change",()=>{ if(cb.checked){ if(!cur.includes(c.f))cur.push(c.f);} else { const i=cur.indexOf(c.f); if(i>=0)cur.splice(i,1);} });
+      list.appendChild(el("label",{class:"check"}, cb, c.h));
+    });
+  }
+  quick.appendChild(el("button",{class:"btn sm",onclick:()=>{ cur=EQ_COLUMNS.map(c=>c.f); paint(); }},"Todas"));
+  quick.appendChild(el("button",{class:"btn sm",onclick:()=>{ cur=["idPlanilla","carpeta","inventario","equipo","servicio","unidad","ubicacion","procedencia","marca","modelo","serie","anio","vidaUtil","clasif"]; paint(); }},"Ficha completa"));
+  quick.appendChild(el("button",{class:"btn sm",onclick:()=>{ cur=EQ_DEFAULT_COLS.slice(); paint(); }},"Mínimas"));
+  body.appendChild(quick);
+  paint(); body.appendChild(list);
   openDrawer("Columnas de la tabla", body, [
     {label:"Restaurar", cls:"", act:async()=>{ prefs.columnasEquipos=null; await persistPrefs(); closeDrawer(); render(); }},
     {label:"Guardar", cls:"primary", act:async()=>{ prefs.columnasEquipos = EQ_COLUMNS.filter(c=>cur.includes(c.f)).map(c=>c.f); await persistPrefs(); closeDrawer(); render(); toast("Columnas guardadas."); }}
@@ -1413,7 +1427,7 @@ function openFicha(key){
     const tb=el("tbody",{});
     for(const it of items){
       tb.appendChild(el("tr",{},
-        el("td",{class:"mono"}, fmtDate(it.fecha)),
+        el("td",{class:"mono"}, it.monthOnly ? (MESES[parseInt(it.fecha.slice(5,7),10)-1]+" "+it.fecha.slice(0,4)) : fmtDate(it.fecha)),
         el("td",{}, el("span",{class:"tl-ico "+it.cls},it.ico+" "), it.titulo),
         el("td",{class:"small"}, esc(it.detalle||""))
       ));
@@ -1425,9 +1439,20 @@ function openFicha(key){
 }
 function buildTimeline(key){
   const items=[];
+  const mesesConApp=new Set();
   for(const m of mpByEquipo(key)){
+    const mm=mesDeFecha(m.fecha); if(mm!=null) mesesConApp.add(mm);
     items.push({ fecha:m.fecha||m.creado, cls:"tl-mp", ico:"✓", titulo:`MP ${m.resultado?RESULTADOS[m.resultado]||m.resultado:"(sin resultado)"} ${m.tipoRegistro==="Borrador"?"· borrador":""}`,
       detalle:[m.ejecutor, m.tipoMantenimiento, m.observaciones].filter(Boolean).join(" · ") });
+  }
+  // Resultados oficiales de la planilla (.xlsm): solo mes, sin día exacto.
+  const anio = (state.meta&&state.meta.fechaCarga? String(state.meta.fechaCarga).slice(0,4):"2026");
+  for(const r of regsByEquipo(key)){
+    if(!r.resultado) continue;
+    if(mesesConApp.has(r.mes)) continue; // ya hay una MP de la app ese mes (con fecha exacta)
+    items.push({ fecha:`${anio}-${String(r.mes+1).padStart(2,"0")}-15`, monthOnly:true, cls:"tl-mp", ico:"▣",
+      titulo:`MP ${RESULTADOS[r.resultado]||r.resultado} · planilla oficial`,
+      detalle:`Registrada en ${MESES_LARGO[r.mes]} ${anio} (el .xlsm guarda el mes, no el día exacto)` });
   }
   for(const p of pendByEquipo(key)){
     items.push({ fecha:p.creado, cls:"tl-pend", ico:"◷", titulo:`Pendiente ${PEND_TIPOS[p.tipo]?.label||p.tipo} creado`, detalle:p.descripcion||"" });
@@ -2100,10 +2125,10 @@ function buildWorkbook(){
 
   // Equipos (con estado y nº de pendientes derivados)
   addSheet(state.equipos.map(e=>({
-    "N° Inventario":e.inventario, Equipo:e.equipo, "N° Serie":e.serie, Familia:e.fam, Servicio:e.servicio,
-    Unidad:e.unidad, Ubicación:e.ubicacion, Marca:e.marca, Modelo:e.modelo, Procedencia:e.procedencia,
-    Año:e.anio, Clasificación:e.clasif, Frecuencia:e.frecuencia, Estado:estadoEquipo(e.key),
-    "Pendientes abiertos": pendByEquipo(e.key).filter(p=>p.estado!=="Completado").length, Fila:e.fila
+    ID:e.idPlanilla, "N° Carpeta":e.carpeta, "N° Inventario":e.inventario, Equipo:e.equipo, Servicio:e.servicio,
+    Unidad:e.unidad, Ubicación:e.ubicacion, Procedencia:e.procedencia, Marca:e.marca, Modelo:e.modelo, "N° Serie":e.serie,
+    "Año Instalación":e.anio, "Vida Útil Residual":e.vidaUtil, Clasificación:e.clasif, Familia:e.fam, Frecuencia:e.frecuencia,
+    Estado:estadoEquipo(e.key), "Pendientes abiertos": pendByEquipo(e.key).filter(p=>p.estado!=="Completado").length, Fila:e.fila
   })), "Equipos");
 
   // Mantenciones (detalleMP)
