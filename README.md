@@ -53,10 +53,13 @@ Pendientes). Los respaldos reales y esta planilla se conservan en `data/`.
   resultado; desde otras vistas salta a Equipos), **filtro por encabezado tipo Excel**
   (multi-selección), selector de columnas recordado, orden por columna, filtros rápidos
   combinables, exportación a Excel.
-- **Ficha de equipo**: historial cronológico unificado (MP + pendientes + correctivos)
-  **filtrable** (por tipo y texto), con **columnas configurables** (Fecha, Tipo, Qué pasó,
-  Detalle, Ejecutor, Estado equipo, Resultado — recordadas) y **edición por fila** (cada
-  evento abre su editor; los resultados de planilla ofrecen «Registrar» para capturar el día).
+- **Ficha de equipo**: navegación **anterior/siguiente** dentro de la lista filtrada;
+  **pendientes del equipo en línea** (completar/editar sin salir de la ficha); historial
+  cronológico unificado (MP + pendientes + correctivos) **filtrable** (por tipo y texto),
+  con **columnas configurables** (Fecha, Tipo, Qué pasó, Detalle, Ejecutor, Estado equipo,
+  Resultado — recordadas) y **edición por fila** (cada evento abre su editor y vuelve a la
+  ficha al cerrar; los resultados de planilla ofrecen «Registrar» para capturar el día).
+- **Pendientes**: además de abrir cada uno, botón **✓** para completar sin abrir el panel.
 - **Mantenimiento Preventivo**: registro del detalle, ciclo Borrador→Oficial,
   pendiente automático con causal o gestión pendiente.
 - **Mantenimiento Correctivo**: expediente flexible por **Folio SIGEM** (sub-eventos

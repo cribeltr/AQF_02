@@ -346,6 +346,7 @@ let ui = {
   headerFilters: {}, // {field:Set(values)}
   quick: { familia:"", servicio:"", estado:"", mes:"" },
 };
+let fichaReturnKey = null; // contexto: ficha a la que volver tras cerrar un editor
 let dirtySinceBackup = false;
 let backupDirHandle = null; // File System Access API
 let changesSinceFolderSave = 0;
@@ -1379,8 +1380,19 @@ function openColSelector(){
 /* --------------------------- Ficha de equipo ----------------------------- */
 function openFicha(key){
   const e=equipoByKey(key); if(!e) return;
+  fichaReturnKey=null; // la ficha es ahora el contexto
   recordEvent("ficha","Abrió equipo "+(e.inventario||"")+" — "+(e.equipo||""));
   const body=el("div");
+  // navegación anterior/siguiente dentro de la lista filtrada actual
+  const lista=filteredEquipos(); const idx=lista.findIndex(x=>x.key===key);
+  if(idx>=0 && lista.length>1){
+    body.appendChild(el("div",{class:"tag-row",style:"margin-bottom:10px;align-items:center"},
+      el("button",{class:"btn sm",disabled: idx<=0?true:null, onclick:()=>{ if(idx>0) openFicha(lista[idx-1].key); }},"◀ Anterior"),
+      el("span",{class:"pill"},`${idx+1} / ${lista.length}`),
+      el("button",{class:"btn sm",disabled: idx>=lista.length-1?true:null, onclick:()=>{ if(idx<lista.length-1) openFicha(lista[idx+1].key); }},"Siguiente ▶"),
+      el("span",{class:"faint small"},"en la lista filtrada")
+    ));
+  }
   // datos
   const est=estadoEquipo(key);
   body.appendChild(el("div",{class:"tag-row",style:"margin-bottom:10px"}, badgeEstado(est),
@@ -1406,14 +1418,43 @@ function openFicha(key){
   prog.appendChild(ptab);
   body.appendChild(prog);
 
-  // acciones
-  const nPendEq=pendByEquipo(key).filter(p=>p.estado!=="Completado").length;
+  // acciones (abren su editor y vuelven a la ficha al cerrar)
   body.appendChild(el("div",{class:"tag-row",style:"margin:14px 0"},
-    el("button",{class:"btn sm primary",onclick:()=>{ closeDrawer(); openMPForm(null,key); }},"+ Registrar MP"),
-    el("button",{class:"btn sm",onclick:()=>{ closeDrawer(); openPendForm(null,{equipoKey:key}); }},"+ Pendiente"),
-    el("button",{class:"btn sm",onclick:()=>{ closeDrawer(); openCorrSubevento(key); }},"+ Correctivo"),
-    nPendEq?el("button",{class:"btn sm",onclick:()=>{ closeDrawer(); goPendientes(key); }},`Ver pendientes (${nPendEq})`):null,
+    el("button",{class:"btn sm primary",onclick:()=>{ fichaReturnKey=key; openMPForm(null,key); }},"+ Registrar MP"),
+    el("button",{class:"btn sm",onclick:()=>{ fichaReturnKey=key; openPendForm(null,{equipoKey:key}); }},"+ Pendiente"),
+    el("button",{class:"btn sm",onclick:()=>{ fichaReturnKey=key; openCorrSubevento(key); }},"+ Correctivo"),
   ));
+
+  // Pendientes del equipo — inline, sin salir de la ficha
+  const pendBox=el("div"); body.appendChild(pendBox);
+  function paintPend(){
+    pendBox.innerHTML="";
+    const abiertos=pendByEquipo(key).filter(p=>p.estado!=="Completado");
+    const card=el("div",{class:"card",style:"padding:10px 12px"});
+    card.appendChild(el("h3",{style:"margin-bottom:8px"},"Pendientes del equipo ",el("span",{class:"count"},`(${abiertos.length} abiertos)`),
+      el("span",{class:"spacer",style:"flex:1"}),
+      el("button",{class:"btn sm ghost",onclick:()=>{ fichaReturnKey=key; goPendientes(key); }},"Ver todos")));
+    if(!abiertos.length) card.appendChild(el("div",{class:"small muted"},"Sin pendientes abiertos. ✓"));
+    else {
+      const tw=el("div",{class:"tablewrap dense"}); const t=el("table",{class:"grid"});
+      t.appendChild(el("thead",{},el("tr",{},...["Tipo","Compromiso","En espera de",""].map(h=>el("th",{},h)))));
+      const tb=el("tbody",{});
+      for(const p of abiertos){ const atraso=diasAtraso(p);
+        tb.appendChild(el("tr",{},
+          el("td",{}, el("span",{class:"badge "+origenCls(PEND_TIPOS[p.tipo]?.origen)},PEND_TIPOS[p.tipo]?.label||p.tipo)),
+          el("td",{}, fmtDate(p.fechaCompromiso), atraso?el("span",{class:"badge b-bad",style:"margin-left:5px"},atraso+"d"):null),
+          el("td",{class:"small"}, esc(p.enEsperaDe||"")),
+          el("td",{}, el("div",{class:"tag-row"},
+            el("button",{class:"btn sm",title:"Marcar completado",onclick:async()=>{ p.estado="Completado"; p.fechaCompletado=todayISO(); await markDirty("usuario"); recordEvent("click","Completar pendiente inline (ficha)"); paintPend(); paintHist(); }},"✓ Completar"),
+            el("button",{class:"btn sm ghost",onclick:()=>{ fichaReturnKey=key; openPendForm(p); }},"Editar")
+          ))
+        ));
+      }
+      t.appendChild(tb); tw.appendChild(t); card.appendChild(tw);
+    }
+    pendBox.appendChild(card);
+  }
+  paintPend();
 
   // Historial unificado — filtrable, con columnas configurables y edición por fila
   body.appendChild(el("hr",{class:"soft"}));
@@ -1533,10 +1574,11 @@ function visibleHistColumns(){
   return HIST_COLUMNS.filter(c=>sel.includes(c.f));
 }
 function abrirEdicionHist(it, key){
-  if(it.edit.kind==="mp"){ const m=state.detalleMP.find(x=>x.id===it.edit.id); if(m){ closeDrawer(); openMPForm(m); } }
-  else if(it.edit.kind==="mp_planilla"){ closeDrawer(); openMPForm(null, key, it.edit.mes); }
-  else if(it.edit.kind==="pend"){ const p=state.pendientes.find(x=>x.id===it.edit.id); if(p){ closeDrawer(); openPendForm(p); } }
-  else if(it.edit.kind==="corr"){ closeDrawer(); openCorrExpediente(it.edit.id); }
+  fichaReturnKey=key; // volver a la ficha al cerrar el editor
+  if(it.edit.kind==="mp"){ const m=state.detalleMP.find(x=>x.id===it.edit.id); if(m) openMPForm(m); else fichaReturnKey=null; }
+  else if(it.edit.kind==="mp_planilla"){ openMPForm(null, key, it.edit.mes); }
+  else if(it.edit.kind==="pend"){ const p=state.pendientes.find(x=>x.id===it.edit.id); if(p) openPendForm(p); else fichaReturnKey=null; }
+  else if(it.edit.kind==="corr"){ openCorrExpediente(it.edit.id); }
 }
 
 /* ------------------------- Vista: Mant. Preventivo ----------------------- */
@@ -1898,7 +1940,10 @@ function viewPendientes(){
       el("td",{class:"small"}, esc(p.enEsperaDe||"")),
       el("td",{class:"small"}, esc(p.respEjecutivo||"")),
       el("td",{}, p.estado==="Completado"?el("span",{class:"badge b-ok"},"Completado"):el("span",{class:"badge b-warn"},"Abierto")),
-      el("td",{}, el("button",{class:"btn sm ghost",onclick:(ev)=>{ev.stopPropagation();openPendForm(p);}},"Abrir"))
+      el("td",{}, el("div",{class:"tag-row"},
+        p.estado!=="Completado"?el("button",{class:"btn sm",title:"Marcar completado sin abrir",onclick:async(ev)=>{ ev.stopPropagation(); p.estado="Completado"; p.fechaCompletado=todayISO(); await markDirty("usuario"); recordEvent("click","Completar pendiente inline (lista)"); render(); }},"✓"):null,
+        el("button",{class:"btn sm ghost",onclick:(ev)=>{ev.stopPropagation();openPendForm(p);}},"Abrir")
+      ))
     ));
   }
   t.appendChild(tb); tw.appendChild(t); wrap.appendChild(tw);
@@ -2132,7 +2177,12 @@ function openDrawer(title, bodyNode, buttons=[], opts={}){
   }
   $("#drawer").classList.add("open"); $("#drawerBack").classList.add("open");
 }
-function closeDrawer(){ $("#drawer").classList.remove("open"); $("#drawerBack").classList.remove("open"); }
+function closeDrawer(){
+  $("#drawer").classList.remove("open"); $("#drawerBack").classList.remove("open");
+  // Volver al contexto: si se abrió un editor desde una ficha, reabrir la ficha al cerrar
+  // (salvo que otro panel se haya abierto encima, p. ej. un sub-evento encadenado).
+  if(fichaReturnKey){ const k=fichaReturnKey; fichaReturnKey=null; setTimeout(()=>{ if(!$("#drawer").classList.contains("open")) openFicha(k); }, 60); }
+}
 
 function openVolcarPanel(pv){
   const body=el("div");
