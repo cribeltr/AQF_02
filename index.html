@@ -241,7 +241,7 @@ hr.soft{border:none; border-top:1px solid var(--line-soft); margin:14px 0}
   <div class="topactions">
     <button class="btn primary" id="btnLoadXlsm">Cargar .xlsm</button>
     <button class="btn" id="btnBackupNow" title="Exporta respaldo JSON (reimportable) + libro Excel">Respaldar ahora</button>
-    <button class="btn" id="btnRec" title="Graba tu navegación y acciones (con marca de tiempo) para revisar cómo usas la app. Se incluye en el respaldo.">● Grabar uso</button>
+    <button class="btn" id="btnRec" title="Grabación de uso activa: registra navegación, búsquedas, filtros y acciones (con marca de tiempo) y se incluye en el respaldo, para analizar cómo usas la app y proponer mejoras. Clic para pausar.">● Grabando</button>
     <button class="btn" id="btnMenu">Más ▾</button>
   </div>
 </div>
@@ -350,27 +350,36 @@ let dirtySinceBackup = false;
 let backupDirHandle = null; // File System Access API
 let changesSinceFolderSave = 0;
 
-/* Grabación de uso: bitácora de navegación/acciones con marca de tiempo */
+/* Grabación de uso: bitácora de navegación/acciones con marca de tiempo.
+   Siempre activa por defecto (buffer rotativo) para que el respaldo capture el
+   uso real y poder analizarlo y proponer mejoras. El botón pausa/reanuda. */
 let usageLog = [];
-let recording = false;
+let recording = true;
 let _lastLoggedView = null;
 function recordEvent(type, detail){
   if(!recording) return;
   usageLog.push({ t:new Date().toISOString(), view:ui.view, type, detail:String(detail==null?"":detail).replace(/\s+/g," ").trim().slice(0,160) });
-  if(usageLog.length>8000) usageLog.shift();
+  if(usageLog.length>6000) usageLog.splice(0, usageLog.length-6000);
 }
 function toggleRecording(){
-  if(!recording){ recording=true; _lastLoggedView=null; recordEvent("session","▶ Inicio de grabación"); toast("Grabación de uso iniciada."); }
-  else { recordEvent("session","⏹ Fin de grabación"); recording=false; toast(`Grabación detenida — ${usageLog.length} eventos registrados.`); persistUsuario(); }
+  if(!recording){ recording=true; _lastLoggedView=null; recordEvent("session","▶ Reanudada"); toast("Grabación de uso reanudada."); }
+  else { recordEvent("session","⏸ Pausada"); recording=false; toast(`Grabación pausada — ${usageLog.length} eventos.`); persistUsuario(); }
   syncRecBtn();
 }
 function syncRecBtn(){ const b=document.getElementById("btnRec"); if(!b) return;
-  b.classList.toggle("on",recording); b.textContent = recording? "■ Detener ("+usageLog.length+")" : "● Grabar uso"; }
+  b.classList.toggle("on",recording); b.textContent = recording? "● Grabando ("+usageLog.length+")" : "▶ Reanudar grabación"; }
 function downloadUsageLog(){
   if(!usageLog.length){ toast("No hay grabación que descargar."); return; }
-  download(`grabacion-uso-MP2026-${todayISO()}.json`, JSON.stringify({ tipo:"grabacion-uso-gmp2026", fecha:new Date().toISOString(), eventos:usageLog }, null, 2));
+  download(`grabacion-uso-MP2026-${todayISO()}.json`, JSON.stringify({ tipo:"grabacion-uso-gmp2026", fecha:new Date().toISOString(), entorno:entornoSesion(), resumen:resumenUso(), eventos:usageLog }, null, 2));
 }
 function clearUsageLog(){ if(!usageLog.length){ toast("Nada que borrar."); return; } if(confirm("¿Borrar la grabación de uso ("+usageLog.length+" eventos)?")){ usageLog=[]; persistUsuario(); syncRecBtn(); toast("Grabación borrada."); } }
+function entornoSesion(){ return { pantalla:`${window.innerWidth}×${window.innerHeight}`, agente:navigator.userAgent, version:"v3",
+  datos:{ equipos:state.equipos.length, mantenciones:state.detalleMP.length, pendientes:state.pendientes.length, correctivos:state.correctivos.length } }; }
+function resumenUso(){
+  const porTipo={}, porVista={};
+  for(const e of usageLog){ porTipo[e.type]=(porTipo[e.type]||0)+1; if(e.view)porVista[e.view]=(porVista[e.view]||0)+1; }
+  return { eventos:usageLog.length, desde:usageLog[0]?.t, hasta:usageLog[usageLog.length-1]?.t, porTipo, porVista };
+}
 
 /* ------------------------------ Utilidades ------------------------------- */
 const $ = (s,r=document)=>r.querySelector(s);
@@ -393,7 +402,8 @@ function el(tag, attrs={}, ...kids){
 function fmtDate(iso){ if(!iso) return ""; const d=String(iso).slice(0,10); const p=d.split("-"); return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:d; }
 function daysBetween(a,b){ if(!a||!b) return null; return Math.round((new Date(b)-new Date(a))/86400000); }
 function daysFromToday(iso){ if(!iso) return null; return Math.round((new Date(todayISO())-new Date(String(iso).slice(0,10)))/86400000); }
-function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),2600); }
+function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),2600);
+  recordEvent(/error|no se|inválid|obligator|⚠/i.test(msg)?"error":"aviso", msg); }
 function download(filename, content, mime="application/json"){
   const blob = content instanceof Blob ? content : new Blob([content],{type:mime});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename;
@@ -1294,7 +1304,7 @@ function viewEquipos(){
 }
 function uniqueVals(f){ return [...new Set(state.equipos.map(e=>e[f]).filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b))); }
 function makeQuickSelect(key,label,vals){
-  const s=el("select",{onchange:e=>{ ui.quick[key]=e.target.value; render(); }});
+  const s=el("select",{onchange:e=>{ ui.quick[key]=e.target.value; if(e.target.value)recordEvent("filtro",`${key}=${e.target.value}`); render(); }});
   s.appendChild(el("option",{value:""},label+"…"));
   vals.forEach(v=>{ const o=el("option",{value:v},v); if(ui.quick[key]===v)o.selected=true; s.appendChild(o); });
   return s;
@@ -1302,6 +1312,7 @@ function makeQuickSelect(key,label,vals){
 function toggleSort(f){
   if(ui.sortCol!==f){ ui.sortCol=f; ui.sortDir=1; }
   else { ui.sortDir = ui.sortDir===1?2:(ui.sortDir===2?0:1); if(ui.sortDir===0) ui.sortCol=null; }
+  recordEvent("orden", ui.sortCol?`${ui.sortCol} ${ui.sortDir===1?"asc":"desc"}`:"sin orden");
   render();
 }
 function openFunnel(ev,col){
@@ -2013,6 +2024,7 @@ function emptyNoData(){ return el("div",{class:"empty"}, el("div",{class:"big"},
    Drawer
    ========================================================================= */
 function openDrawer(title, bodyNode, buttons=[], opts={}){
+  recordEvent("panel", title);
   $("#drawerTitle").textContent=title;
   const b=$("#drawerBody"); b.innerHTML=""; b.appendChild(bodyNode);
   if(buttons.length){
@@ -2043,7 +2055,7 @@ function exportJSON(){
   const payload={ app:"Sistema de Gestión MP 2026 — Equipamiento Clínico HHHA", tipo:"respaldo-gmp2026-v3", version:3,
     fecha:new Date().toISOString(), meta:state.meta,
     detalleMP:state.detalleMP, pendientes:state.pendientes, correctivos:state.correctivos,
-    empresas:state.empresas, ingenieros:state.ingenieros, usageLog, prefs };
+    empresas:state.empresas, ingenieros:state.ingenieros, usageLog, usoResumen:resumenUso(), entorno:entornoSesion(), prefs };
   download(`respaldo-MP2026-${todayISO()}.json`, JSON.stringify(payload,null,2));
   dirtySinceBackup=false; changesSinceFolderSave=0; render(); toast("Respaldo JSON exportado.");
 }
@@ -2134,7 +2146,7 @@ async function saveToFolder(){
   try{
     // JSON reimportable
     const payload={ tipo:"respaldo-gmp2026-v3", version:3, fecha:new Date().toISOString(), meta:state.meta,
-      detalleMP:state.detalleMP, pendientes:state.pendientes, correctivos:state.correctivos, empresas:state.empresas, ingenieros:state.ingenieros, usageLog, prefs };
+      detalleMP:state.detalleMP, pendientes:state.pendientes, correctivos:state.correctivos, empresas:state.empresas, ingenieros:state.ingenieros, usageLog, usoResumen:resumenUso(), entorno:entornoSesion(), prefs };
     const fhJ=await backupDirHandle.getFileHandle(`respaldo-MP2026.json`,{create:true});
     const wJ=await fhJ.createWritable(); await wJ.write(JSON.stringify(payload,null,2)); await wJ.close();
     // Excel legible (mismo libro de "Respaldar ahora")
@@ -2160,8 +2172,8 @@ function openMenu(){
   body.appendChild(item("Importar respaldo JSON","Restaura desde un respaldo de esta app.",()=>{closeDrawer();$("#fileJson").click();}));
   body.appendChild(item("Elegir carpeta de auto-guardado","Respaldo automático de JSON + Excel a una carpeta, sin clics (también al cerrar la pestaña). Requiere Chrome/Edge.",()=>{closeDrawer();chooseBackupFolder();}));
   body.appendChild(el("hr",{class:"soft"}));
-  body.appendChild(item((recording?"■ Detener grabación":"● Grabar uso")+` (${usageLog.length} eventos)`,"Registra tu navegación y acciones con marca de tiempo. Se incluye en el respaldo.",()=>{closeDrawer();toggleRecording();}));
-  body.appendChild(item("Descargar grabación de uso","Exporta la bitácora de uso como JSON para compartir.",()=>{closeDrawer();downloadUsageLog();}));
+  body.appendChild(item((recording?"⏸ Pausar grabación de uso":"▶ Reanudar grabación de uso")+` (${usageLog.length} eventos)`,"Activa por defecto. Registra navegación, búsquedas, filtros, paneles y avisos con marca de tiempo; se incluye en el respaldo.",()=>{closeDrawer();toggleRecording();}));
+  body.appendChild(item("Descargar grabación de uso","Exporta la bitácora + resumen y entorno como JSON para compartir conmigo.",()=>{closeDrawer();downloadUsageLog();}));
   body.appendChild(item("Borrar grabación de uso","Vacía la bitácora de uso registrada.",()=>{closeDrawer();clearUsageLog();}));
   body.appendChild(el("hr",{class:"soft"}));
   body.appendChild(item("Reset total","Borra preferencias, planilla y datos de usuario.",()=>{closeDrawer();resetTotal();},"" ));
@@ -2199,13 +2211,13 @@ function wireUI(){
   $("#fileIntegrado").addEventListener("change",e=>{ const f=e.target.files[0]; if(f){closeDrawer();importIntegrado(f);} e.target.value=""; });
 
   let deb;
-  $("#globalSearch").addEventListener("input",e=>{ clearTimeout(deb); deb=setTimeout(()=>{ ui.search=e.target.value; render(); },300); });
+  $("#globalSearch").addEventListener("input",e=>{ clearTimeout(deb); deb=setTimeout(()=>{ ui.search=e.target.value; if(e.target.value.trim())recordEvent("buscar",e.target.value.trim()); render(); },300); });
 
   document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ closeDrawer(); closeFunnel(); } });
   // Al ocultar/cerrar la pestaña: si hay carpeta de auto-guardado, escribir JSON+Excel (mejor esfuerzo);
   // este evento es más fiable que beforeunload para operaciones asíncronas.
-  document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden" && backupDirHandle && dirtySinceBackup) saveToFolder(); });
-  window.addEventListener("pagehide",()=>{ if(backupDirHandle && dirtySinceBackup) saveToFolder(); });
+  document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden"){ persistUsuario(); if(backupDirHandle && dirtySinceBackup) saveToFolder(); } });
+  window.addEventListener("pagehide",()=>{ persistUsuario(); if(backupDirHandle && dirtySinceBackup) saveToFolder(); });
   // Aviso al cerrar SOLO si hay cambios y no hay auto-guardado a carpeta activo.
   window.addEventListener("beforeunload",e=>{ if(dirtySinceBackup && !backupDirHandle){ e.preventDefault(); e.returnValue=""; } });
 }
@@ -2213,6 +2225,7 @@ function wireUI(){
 (async function init(){
   wireUI();
   await loadAll();
+  recordEvent("session","▶ Apertura · "+entornoSesion().pantalla+" · equipos:"+state.equipos.length);
   render();
 })();
 </script>

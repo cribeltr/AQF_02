@@ -60,9 +60,10 @@ Pendientes). Los respaldos reales y esta planilla se conservan en `data/`.
   un clic) y `enEsperaDe`.
 - **Reprogramación**: ciclo C1/C5/C6/C7/C8 (generar → imprimir → 2 firmas → oficializar).
 - **Resumen mes × código** con conteos y *drill-down* a la vista de Equipos.
-- **Grabación de uso** (botón «Grabar uso»): registra navegación y acciones con marca
-  de tiempo; se guarda con el respaldo y se puede descargar como JSON para revisar
-  cómo se usa la app.
+- **Grabación de uso** (activa por defecto; botón para pausar): registra navegación,
+  búsquedas, filtros, paneles, aperturas de ficha, clics y avisos/errores con marca de
+  tiempo, más entorno (pantalla, navegador) y un resumen. Se incluye en el respaldo y
+  se puede descargar/borrar desde «Más» — pensada para analizar el uso y proponer mejoras.
 - **Diseño responsivo**: la ficha de equipo y las tablas se adaptan al ancho de la
   pantalla, sin scroll horizontal.
 
