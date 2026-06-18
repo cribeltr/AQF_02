@@ -232,7 +232,7 @@ hr.soft{border:none; border-top:1px solid var(--line-soft); margin:14px 0}
   </div>
   <div class="topactions">
     <button class="btn primary" id="btnLoadXlsm">Cargar .xlsm</button>
-    <button class="btn" id="btnBackupNow" title="Exportar respaldo JSON">Respaldar ahora</button>
+    <button class="btn" id="btnBackupNow" title="Exporta respaldo JSON (reimportable) + libro Excel">Respaldar ahora</button>
     <button class="btn" id="btnMenu">Más ▾</button>
   </div>
 </div>
@@ -886,7 +886,7 @@ function viewTablero(){
     wrap.appendChild(el("div",{class:"banner warn"},
       el("span",{},"⚠ Hay cambios sin respaldar."),
       el("span",{class:"spacer"}),
-      el("button",{class:"btn sm",onclick:exportJSON},"Respaldar ahora"),
+      el("button",{class:"btn sm",onclick:respaldarAhora},"Respaldar ahora (JSON + Excel)"),
       backupDirHandle?null:el("button",{class:"btn sm",onclick:chooseBackupFolder},"Elegir carpeta de auto-guardado")
     ));
   }
@@ -1845,8 +1845,10 @@ function exportJSON(){
     detalleMP:state.detalleMP, pendientes:state.pendientes, correctivos:state.correctivos,
     empresas:state.empresas, ingenieros:state.ingenieros, prefs };
   download(`respaldo-MP2026-${todayISO()}.json`, JSON.stringify(payload,null,2));
-  dirtySinceBackup=false; changesSinceFolderSave=0; render(); toast("Respaldo exportado.");
+  dirtySinceBackup=false; changesSinceFolderSave=0; render(); toast("Respaldo JSON exportado.");
 }
+// "Respaldar ahora": genera el respaldo reimportable (JSON) y la estructura legible (Excel)
+function respaldarAhora(){ exportJSON(); exportAllXLSX(); }
 async function importJSON(file){
   try{
     const data=JSON.parse(await file.text());
@@ -1878,6 +1880,47 @@ function exportTableXLSX(rows, name){
   XLSX.writeFile(wb, `${name}-${todayISO()}.xlsx`);
 }
 
+// Respaldo completo en estructura Excel: un libro .xlsx con una hoja por colección
+function exportAllXLSX(){
+  const wb=XLSX.utils.book_new();
+  const addSheet=(rows,name)=>{ const ws=XLSX.utils.json_to_sheet(rows.length?rows:[{ "(sin datos)":"" }]); XLSX.utils.book_append_sheet(wb,ws,name.slice(0,31)); };
+
+  // Equipos (con estado y nº de pendientes derivados)
+  addSheet(state.equipos.map(e=>({
+    "N° Inventario":e.inventario, Equipo:e.equipo, "N° Serie":e.serie, Familia:e.fam, Servicio:e.servicio,
+    Unidad:e.unidad, Ubicación:e.ubicacion, Marca:e.marca, Modelo:e.modelo, Procedencia:e.procedencia,
+    Año:e.anio, Clasificación:e.clasif, Frecuencia:e.frecuencia, Estado:estadoEquipo(e.key),
+    "Pendientes abiertos": pendByEquipo(e.key).filter(p=>p.estado!=="Completado").length, Fila:e.fila
+  })), "Equipos");
+
+  // Mantenciones (detalleMP)
+  addSheet(state.detalleMP.map(mpRowForExport), "Mantenciones");
+
+  // Pendientes (+ seguimiento resumido en una columna)
+  addSheet(state.pendientes.map(p=>{ const r=pendRowForExport(p);
+    r.EnEsperaDe=p.enEsperaDe||""; r.Prioridad=p.prioridad||""; r.Causal=p.causal||"";
+    r.Tareas=(p.tareas||[]).map(t=>(t.hecha?"✓ ":"☐ ")+(t.texto||"")).join(" | ");
+    r.Seguimiento=(p.seguimiento||[]).map(s=>`${(s.fecha||"").slice(0,10)}: ${s.texto}`).join(" || ");
+    r.Creado=p.creado; r.Completado=p.fechaCompletado||""; return r; }), "Pendientes");
+
+  // Correctivos (expedientes)
+  addSheet(state.correctivos.map(corrRowForExport), "Correctivos");
+
+  // Avances de correctivos (uno por fila, vinculado al folio)
+  const avances=[];
+  for(const c of state.correctivos){ const e=equipoByKey(c.equipoKey)||{};
+    for(const a of (c.avances||[])) avances.push({ Folio:c.folioSigem, Inventario:e.inventario||"", Equipo:e.equipo||"",
+      Fecha:(a.fecha||"").slice(0,10), Tipo:a.tipo, "N°":a.numero||"", Empresa:a.empresa||"", Responsable:a.responsable||"", Detalle:a.detalle||"" }); }
+  addSheet(avances, "Avances correctivos");
+
+  // Resumen mes × código
+  const { cols, matrix }=resumenMesCodigo();
+  addSheet(matrix.map((r,m)=>{ const o={Mes:MESES_LARGO[m]}; cols.forEach(c=>o[c]=r.counts[c]); return o; }), "Resumen mes×código");
+
+  XLSX.writeFile(wb, `respaldo-MP2026-${todayISO()}.xlsx`);
+  toast("Respaldo Excel exportado.");
+}
+
 async function chooseBackupFolder(){
   if(!window.showDirectoryPicker){ toast("Tu navegador no soporta auto-guardado a carpeta. Usa «Respaldar ahora»."); return; }
   try{ backupDirHandle=await window.showDirectoryPicker(); toast("Carpeta de respaldo elegida. Auto-guardado activo."); saveToFolder(); }
@@ -1903,7 +1946,8 @@ function openMenu(){
   const item=(label,desc,act,cls)=> el("button",{class:"btn "+(cls||""),style:"display:block;width:100%;text-align:left;margin-bottom:8px",onclick:act}, el("b",{},label), desc?el("div",{class:"small faint"},desc):null);
   body.appendChild(item("Cargar .xlsm","Lee ProgramaciónMP2026.xlsm (solo lectura).",()=>{closeDrawer();$("#fileXlsm").click();},"primary"));
   body.appendChild(item("Importar respaldo anterior","Migra datos de la app antigua (respaldo-gmp2026).",()=>{closeDrawer();openImportOld();}));
-  body.appendChild(item("Exportar respaldo JSON","Descarga todos los datos de usuario.",()=>{closeDrawer();exportJSON();}));
+  body.appendChild(item("Exportar respaldo JSON","Descarga todos los datos de usuario (reimportable).",()=>{closeDrawer();exportJSON();}));
+  body.appendChild(item("Exportar todo a Excel","Libro .xlsx con equipos, mantenciones, pendientes, correctivos, avances y resumen.",()=>{closeDrawer();exportAllXLSX();}));
   body.appendChild(item("Importar respaldo JSON","Restaura desde un respaldo de esta app.",()=>{closeDrawer();$("#fileJson").click();}));
   body.appendChild(item("Elegir carpeta de auto-guardado","Respaldo automático (File System Access API).",()=>{closeDrawer();chooseBackupFolder();}));
   body.appendChild(el("hr",{class:"soft"}));
@@ -1923,7 +1967,7 @@ function openImportOld(){
 /* ------------------------------ Bootstrap -------------------------------- */
 function wireUI(){
   $("#btnLoadXlsm").addEventListener("click",()=>$("#fileXlsm").click());
-  $("#btnBackupNow").addEventListener("click",exportJSON);
+  $("#btnBackupNow").addEventListener("click",respaldarAhora);
   $("#btnMenu").addEventListener("click",openMenu);
   $("#drawerClose").addEventListener("click",closeDrawer);
   $("#drawerBack").addEventListener("click",closeDrawer);

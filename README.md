@@ -31,8 +31,11 @@ re-leen del `.xlsm` oficial. Archivo de prueba: `sample-data/ejemplo_respaldo_an
   `Q`/`S`, columnas auxiliares tras `AR` ignoradas, N° Inventario y Serie como
   **texto** (conservan ceros a la izquierda). Datos sucios en celdas de mes → ignorados.
 - **Persistencia** IndexedDB + localStorage (3 claves: preferencias, planilla cruda,
-  datos de usuario). Exportar/Importar JSON, **Reset total**, aviso de respaldo al
-  salir y **auto-guardado a carpeta** (File System Access API) donde haya soporte.
+  datos de usuario). **Reset total**, aviso de respaldo al salir y **auto-guardado a
+  carpeta** (File System Access API) donde haya soporte.
+- **Respaldo doble**: «Respaldar ahora» genera el **JSON** reimportable *y* un libro
+  **Excel** (`.xlsx`) con una hoja por colección (equipos, mantenciones, pendientes,
+  correctivos, avances y resumen mes×código). También disponibles por separado en «Más».
 - **Tablero / centro de control**: banda de KPIs reactivos, tablero de operatividad
   y panel «Por volcar al `.xlsm`» (celda exacta hoja/fila/columna, copiar/exportar).
 - **Equipos**: tabla densa (~1.000 filas, sin virtualización), búsqueda global con
