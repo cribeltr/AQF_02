@@ -491,6 +491,7 @@ async function loadAll(){
 }
 async function markDirty(persist="usuario"){
   dirtySinceBackup = true;
+  invalidarIndices();
   if(persist==="usuario") await persistUsuario();
   else if(persist==="datos") await persistDatos();
   changesSinceFolderSave++;
@@ -901,19 +902,33 @@ async function importConsolidado(file){
 /* =========================================================================
    LÓGICA DE NEGOCIO / DECISIÓN
    ========================================================================= */
-const equipoByKey = (k)=> state.equipos.find(e=>e.key===k);
-const regsByEquipo = (k)=> state.registros.filter(r=>r.equipoKey===k);
-const mpByEquipo = (k)=> state.detalleMP.filter(m=>m.equipoKey===k);
-const pendByEquipo = (k)=> state.pendientes.filter(p=>p.equipoKey===k);
-const corrByEquipo = (k)=> state.correctivos.filter(c=>c.equipoKey===k);
+const equipoByKey = (k)=> idx().eq.get(k);
+const regsByEquipo = (k)=> idx().r.get(k)||[];
+const mpByEquipo = (k)=> idx().m.get(k)||[];
+const pendByEquipo = (k)=> idx().p.get(k)||[];
+const corrByEquipo = (k)=> idx().c.get(k)||[];
+// Índices por equipoKey (rendimiento): se reconstruyen al renderizar o tras mutar datos.
+let _idx=null;
+function invalidarIndices(){ _idx=null; }
+function idx(){
+  if(_idx) return _idx;
+  const eq=new Map(), r=new Map(), m=new Map(), p=new Map(), c=new Map();
+  const push=(map,k,v)=>{ let a=map.get(k); if(!a){ a=[]; map.set(k,a); } a.push(v); };
+  for(const e of state.equipos) eq.set(e.key,e);
+  for(const x of state.registros) push(r,x.equipoKey,x);
+  for(const x of state.detalleMP) push(m,x.equipoKey,x);
+  for(const x of state.pendientes) push(p,x.equipoKey,x);
+  for(const x of state.correctivos) push(c,x.equipoKey,x);
+  _idx={eq,r,m,p,c}; return _idx;
+}
 
 // B.4 — resultado que cuenta por equipo+mes
 function resultadoMes(key, mes){
-  const reg = state.registros.find(r=>r.equipoKey===key && r.mes===mes && r.resultado);
-  if(reg) return { resultado:reg.resultado, origen:"planilla", programa:reg.programa };
-  const mps = state.detalleMP.filter(m=>m.equipoKey===key && m.resultado && mesDeFecha(m.fecha)===mes)
-                .sort((a,b)=> (a.fecha<b.fecha?1:-1));
-  if(mps.length) return { resultado:mps[0].resultado, origen:"app", mp:mps[0] };
+  const regs=idx().r.get(key);
+  if(regs){ const reg=regs.find(r=>r.mes===mes && r.resultado); if(reg) return { resultado:reg.resultado, origen:"planilla", programa:reg.programa }; }
+  const mlist=idx().m.get(key);
+  if(mlist){ const mps=mlist.filter(m=>m.resultado && mesDeFecha(m.fecha)===mes).sort((a,b)=> (a.fecha<b.fecha?1:-1));
+    if(mps.length) return { resultado:mps[0].resultado, origen:"app", mp:mps[0] }; }
   return { resultado:"", origen:"none" };
 }
 function mesDeFecha(iso){ if(!iso) return null; const m=parseInt(String(iso).slice(5,7),10); return isNaN(m)?null:m-1; }
@@ -1149,6 +1164,7 @@ function renderNav(){
 }
 
 function render(){
+  invalidarIndices();
   renderNav();
   const v=$("#view"); v.innerHTML="";
   if(!state.equipos.length && state.view!=="tablero"){}
@@ -1697,9 +1713,12 @@ function viewPreventivo(){
     el("button",{class:"btn sm",onclick:()=>exportTableXLSX(state.detalleMP.map(mpRowForExport),"Mantenciones")},"Exportar a Excel"),
     el("button",{class:"btn sm primary",onclick:()=>openMPForm(null,null)},"+ Registrar MP"),
   ));
+  const q=ui.search.trim().toLowerCase();
+  const matchEq=(e)=> !q || [e.inventario,e.equipo,e.serie,e.servicio].some(v=>(v||"").toLowerCase().includes(q));
+  if(q) wrap.appendChild(el("div",{class:"filterbar"}, el("span",{class:"chip-x"}, `Búsqueda: ${ui.search}`, el("button",{onclick:()=>{ ui.search=""; $("#globalSearch").value=""; render(); }},"✕"))));
 
   // MP del mes sin resultado
-  const sinRes=mpSinResultado();
+  const sinRes=mpSinResultado().filter(x=>matchEq(x.equipo));
   const c1=el("div",{class:"card"});
   c1.appendChild(el("h3",{},"MP sin resultado por gestionar ",el("span",{class:"count"},`(${sinRes.length})`)));
   if(!sinRes.length) c1.appendChild(el("div",{class:"small muted"},"Sin MP del año pendientes de resultado."));
@@ -1722,15 +1741,16 @@ function viewPreventivo(){
   wrap.appendChild(c1);
 
   // Mantenciones registradas en la app
+  const mlist=state.detalleMP.filter(m=>{ if(!q) return true; const e=equipoByKey(m.equipoKey); return e?matchEq(e):String(m.equipoKey).toLowerCase().includes(q); });
   const c2=el("div",{class:"card"});
-  c2.appendChild(el("h3",{},"Mantenciones registradas en la app ",el("span",{class:"count"},`(${state.detalleMP.length})`)));
-  if(!state.detalleMP.length) c2.appendChild(el("div",{class:"small muted"},"Aún no registras mantenciones."));
+  c2.appendChild(el("h3",{},"Mantenciones registradas en la app ",el("span",{class:"count"},`(${mlist.length}${q?" de "+state.detalleMP.length:""})`)));
+  if(!mlist.length) c2.appendChild(el("div",{class:"small muted"},q?"Sin mantenciones para esta búsqueda.":"Aún no registras mantenciones."));
   else {
     const tw=el("div",{class:"tablewrap dense",style:"max-height:420px"});
     const t=el("table",{class:"grid"});
     t.appendChild(el("thead",{},el("tr",{},...["Fecha","Equipo","Resultado","Ejecutor","Tipo","Estado",""].map(h=>el("th",{},h)))));
     const tb=el("tbody",{});
-    for(const m of state.detalleMP.slice().sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha)))){
+    for(const m of mlist.slice().sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha))).slice(0,500)){
       const e=equipoByKey(m.equipoKey);
       tb.appendChild(el("tr",{},
         el("td",{class:"mono"},fmtDate(m.fecha)),
@@ -1743,6 +1763,7 @@ function viewPreventivo(){
       ));
     }
     t.appendChild(tb); tw.appendChild(t); c2.appendChild(tw);
+    if(mlist.length>500) c2.appendChild(el("div",{class:"small muted",style:"margin-top:6px"},`Mostrando 500 de ${mlist.length} (las más recientes). Usa la búsqueda o «Exportar a Excel» para ver todas.`));
   }
   wrap.appendChild(c2);
   return wrap;
@@ -2551,7 +2572,7 @@ function wireUI(){
   $("#fileIntegrado").addEventListener("change",e=>{ const f=e.target.files[0]; if(f){closeDrawer();importIntegrado(f);} e.target.value=""; });
   $("#fileConsolidado").addEventListener("change",async e=>{ const fs=Array.from(e.target.files); closeDrawer(); for(const f of fs) await importConsolidado(f); e.target.value=""; });
 
-  const SEARCH_VIEWS=["equipos","pendientes","correctivo"]; // vistas donde la búsqueda filtra in situ
+  const SEARCH_VIEWS=["equipos","pendientes","correctivo","preventivo"]; // vistas donde la búsqueda filtra in situ
   let deb;
   $("#globalSearch").addEventListener("input",e=>{ clearTimeout(deb); deb=setTimeout(()=>{ ui.search=e.target.value;
     if(e.target.value.trim()){ recordEvent("buscar",e.target.value.trim());
@@ -2584,9 +2605,23 @@ function wireUI(){
   window.addEventListener("beforeunload",e=>{ if(dirtySinceBackup && !backupDirHandle){ e.preventDefault(); e.returnValue=""; } });
 }
 
+async function resetSilencioso(){
+  await idbDel(LS_PREF); await idbDel(LS_DATOS); await idbDel(LS_USUARIO);
+  try{ localStorage.removeItem(LS_PREF); localStorage.removeItem(LS_DATOS); localStorage.removeItem(LS_USUARIO);}catch(e){}
+  state={ equipos:[],registros:[],detalleMP:[],pendientes:[],correctivos:[],empresas:[],ingenieros:[],meta:null };
+  prefs={ columnasEquipos:null, columnasHistorial:null, ultimoEjecutor:"", ultimoTipoMant:"Interno", ultimaEmpresa:"", ultimoIngeniero:"" };
+  usageLog=[]; dirtySinceBackup=false; invalidarIndices();
+}
 (async function init(){
   wireUI();
-  await loadAll();
+  // Arranque limpio con #reset (abre index.html#reset para empezar sin datos)
+  if(location.hash.replace("#","").toLowerCase()==="reset"){
+    await resetSilencioso();
+    try{ history.replaceState(null,"",location.pathname+location.search); }catch(e){}
+    toast("Iniciado sin datos. Carga el .xlsm para comenzar.");
+  } else {
+    await loadAll();
+  }
   recordEvent("session","▶ Apertura · "+entornoSesion().pantalla+" · equipos:"+state.equipos.length);
   render();
 })();

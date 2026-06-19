@@ -17,6 +17,14 @@ offline tras la primera carga.
 3. Trabaja desde el **Tablero**: KPIs, equipos que necesitan atención y el panel
    «Por volcar al .xlsm».
 
+> **Empezar de cero:** la app guarda tu trabajo en el navegador y lo restaura al
+> abrir. Para arrancar **sin datos**, usa **«Más» → «Reset total»**, o abre
+> directamente **`index.html#reset`** (inicia limpio y vuelve a cargar el `.xlsm`).
+
+> **Atajos:** `/` enfoca la búsqueda · **Enter** abre la ficha si hay un solo
+> resultado · la búsqueda filtra in situ en Equipos, Pendientes, Correctivos y
+> Preventivo (desde otras vistas salta a Equipos).
+
 ### Migrar datos de la app anterior
 
 **«Importar respaldo anterior»** (en el menú lateral o en «Más») lee un respaldo
